@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isTextPath, type CompileResult, type Diagnostic, type Engine, type FileEntry, type Project, type Session, type SyncTexForward } from "@margin/shared";
 import { api } from "../lib/api.ts";
+import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
 import { navigate } from "../lib/router.ts";
 import { load, save } from "../lib/storage.ts";
 import { CommandPalette, type Command } from "./CommandPalette.tsx";
@@ -11,6 +12,8 @@ import { HistoryPanel } from "./HistoryPanel.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
 import { PdfViewer } from "./PdfViewer.tsx";
 import { Problems } from "./Problems.tsx";
+import { Board } from "./Board.tsx";
+import { Avatar, PresenceStrip } from "./Presence.tsx";
 
 const ENGINES: { id: Engine; label: string }[] = [
   { id: "pdflatex", label: "pdfLaTeX" },
@@ -39,6 +42,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [toast, setToast] = useState<string | null>(null);
   const [split, setSplit] = useState(() => load("split", 0.5));
   const [sidebar, setSidebar] = useState(() => load("sidebar", true));
+  const [view, setView] = useState<"write" | "board">(() => load(`view:${projectId}`, "write"));
+
+  const collab = useCollab(projectId, session);
+  const peers = usePeers(collab);
 
   const editor = useRef<EditorHandle>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
@@ -63,7 +70,33 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     if (isTextPath(path)) setTextPath(path);
     if (line) setRevealAt({ line, key: Date.now() });
     save(`open:${projectId}`, path);
+    setView("write");
   }, [projectId]);
+
+  useEffect(() => { collab?.setPresence({ file: openPath, view }); save(`view:${projectId}`, view); }, [collab, openPath, view, projectId]);
+
+  // Unsent-edit dots in the tree.
+  useEffect(() => {
+    if (!collab) return;
+    return collab.onUnsyncedChange(() => setDirty(collab.unsyncedPaths()));
+  }, [collab]);
+
+  // Live events from teammates: files added/removed, someone compiled.
+  useEffect(() => {
+    if (!collab) return;
+    const events = collab.events;
+    const onEvent = (e: { keysChanged: Set<string>; transaction: { local: boolean } }) => {
+      if (e.transaction.local) return;
+      if (e.keysChanged.has("filesVersion")) void refreshFiles();
+      const last = events.get("lastCompile") as { by: string; ok: boolean } | undefined;
+      if (e.keysChanged.has("lastCompile") && last && last.by !== session.name) {
+        setPdfVersion((v) => v + 1);
+        notify(`${last.by} compiled${last.ok ? "" : " (with errors)"} — preview updated`);
+      }
+    };
+    events.observe(onEvent);
+    return () => events.unobserve(onEvent);
+  }, [collab, refreshFiles, session.name, notify]);
 
   // ── Compile ──────────────────────────────────────────────────────────────
   const compileImpl = useRef<() => Promise<void>>(async () => {});
@@ -72,7 +105,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     compiling$.current = true;
     setCompiling(true);
     try {
-      await editor.current?.saveAll();
+      await collab?.flush();
       const r = await api.compile(projectId);
       setResult(r);
       if (r.hasPdf) setPdfVersion((v) => v + 1);
@@ -94,11 +127,22 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         setProject(p);
         setFiles(f);
         const last = load<string | null>(`open:${projectId}`, null);
+        const startView = load<"write" | "board">(`view:${projectId}`, "write");
         openFile(last && f.some((x) => x.path === last) ? last : p.mainFile);
+        setView(startView);
         compile();
       })
       .catch((err) => setLoadError(err.message));
   }, [projectId, openFile, compile]);
+
+  // A teammate deleted or renamed the file you had open.
+  useEffect(() => {
+    if (!project || !files.length || !textPath || files.some((f) => f.path === textPath)) return;
+    collab?.close(textPath);
+    editor.current?.forget(textPath);
+    notify(`${textPath} was moved or deleted`);
+    openFile(files.some((f) => f.path === project.mainFile) ? project.mainFile : files.find((f) => f.path.endsWith(".tex"))?.path ?? project.mainFile);
+  }, [files]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pick up files teammates added while you were away.
   useEffect(() => {
@@ -108,10 +152,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   }, [refreshFiles]);
 
   useEffect(() => {
-    const onBeforeUnload = (e: BeforeUnloadEvent) => { if (editor.current?.hasUnsaved()) e.preventDefault(); };
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { if (collab?.unsyncedPaths().size) e.preventDefault(); };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, []);
+  }, [collab]);
 
   // Global shortcuts (the editor handles its own when focused).
   useEffect(() => {
@@ -122,6 +166,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       const k = e.key.toLowerCase();
       if (k === "k") { e.preventDefault(); setPaletteOpen((o) => !o); }
       else if (k === "s" || k === "enter") { e.preventDefault(); compile(); }
+      else if (k === "b" && e.shiftKey) { e.preventDefault(); setView((v) => (v === "board" ? "write" : "board")); }
       else if (k === "b") { e.preventDefault(); setSidebar((s: boolean) => { save("sidebar", !s); return !s; }); }
     };
     window.addEventListener("keydown", onKey);
@@ -167,8 +212,9 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         case "rename": {
           const to = await ask({ title: "Rename", label: "You can move it by changing the folder.", initial: path, confirm: "Rename" });
           if (!to || to === path) return;
-          await editor.current?.saveAll();
+          await collab?.flush();
           await api.move(projectId, path, to);
+          collab?.closeUnder(path);
           files.filter((f) => f.path === path || f.path.startsWith(`${path}/`)).forEach((f) => editor.current?.forget(f.path));
           const moved = (p: string | null) => (p && (p === path || p.startsWith(`${path}/`)) ? to + p.slice(path.length) : p);
           if (project && moved(project.mainFile) !== project.mainFile) setProject(await api.updateProject(projectId, { mainFile: moved(project.mainFile)! }));
@@ -181,6 +227,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           const ok = await ask({ title: `Delete ${path}?`, label: "It stays recoverable from earlier checkpoints.", confirm: "Delete", danger: true, confirmOnly: true });
           if (ok === null) return;
           await api.remove(projectId, path);
+          collab?.closeUnder(path);
           files.filter((f) => f.path === path || f.path.startsWith(`${path}/`)).forEach((f) => editor.current?.forget(f.path));
           if (openPath === path || openPath?.startsWith(`${path}/`) || textPath === path) openFile(project!.mainFile);
           await refreshFiles();
@@ -216,6 +263,17 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       notify((err as Error).message);
     }
   };
+
+  const follow = (peer: Peer) => {
+    if (peer.view === "board") setView("board");
+    else if (peer.file) openFile(peer.file, peer.line);
+  };
+
+  const peersByFile = useMemo(() => {
+    const m = new Map<string, Peer[]>();
+    peers.forEach((p) => { if (p.file && p.view !== "board") m.set(p.file, [...(m.get(p.file) ?? []), p]); });
+    return m;
+  }, [peers]);
 
   const openDiagnostic = (d: Diagnostic) => d.file && openFile(d.file, d.line);
 
@@ -256,6 +314,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     const cmds: Command[] = [
       { id: "compile", label: "Compile", section: "Action", icon: "play", hint: `${MOD}S`, run: compile },
       { id: "checkpoint", label: "Create checkpoint…", section: "Action", icon: "history", run: () => setHistoryOpen(true) },
+      { id: "board", label: view === "board" ? "Back to writing" : "Open board", section: "View", icon: "board", hint: `${MOD}⇧B`, run: () => setView((v) => (v === "board" ? "write" : "board")) },
       { id: "problems", label: showProblems ? "Hide problems" : "Show problems", section: "View", icon: "alert", run: () => setShowProblems((s) => !s) },
       { id: "sidebar", label: "Toggle sidebar", section: "View", icon: "folder", hint: `${MOD}B`, run: () => setSidebar((s: boolean) => !s) },
       { id: "newfile", label: "New file…", section: "Action", icon: "plus", run: () => void onTreeAction("newFile", "") },
@@ -274,7 +333,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     }
     return cmds;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, textPath, project, showProblems]);
+  }, [files, textPath, project, showProblems, view]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   if (loadError) {
@@ -285,7 +344,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       </div>
     );
   }
-  if (!project) return <div className="center-screen"><Spinner size={20} /></div>;
+  if (!project || !collab) return <div className="center-screen"><Spinner size={20} /></div>;
 
   const errors = result?.diagnostics.filter((d) => d.severity === "error").length ?? 0;
   const warnings = result?.diagnostics.filter((d) => d.severity === "warning").length ?? 0;
@@ -297,7 +356,12 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         <button className="icon-btn" onClick={() => navigate({ name: "projects" })} title="All projects"><Icon name="back" /></button>
         <button className="project-name" onClick={renameProject} title="Rename project">{project.name}</button>
         <span className="chip subtle" title="Main file · engine">{project.mainFile} · {ENGINES.find((e) => e.id === project.engine)?.label}</span>
+        <div className="segmented">
+          <button className={view === "write" ? "active" : ""} onClick={() => setView("write")}>Write</button>
+          <button className={view === "board" ? "active" : ""} onClick={() => setView("board")} title={`Board (${MOD}⇧B)`}>Board</button>
+        </div>
         <div className="spacer" />
+        <PresenceStrip peers={peers} onFollow={follow} />
         {result && (
           <button className={`chip ${errors ? "danger" : warnings ? "warn" : ""}`} onClick={() => setShowProblems((s) => !s)} title="Problems">
             {errors ? <><Icon name="alert" size={13} />{errors} error{errors > 1 ? "s" : ""}</> :
@@ -311,10 +375,13 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           {compiling ? <Spinner /> : <Icon name="play" size={13} />}
           {compiling ? "Compiling" : "Compile"}
         </button>
-        <span className="avatar" title={`Signed in as ${session.name}`}>{session.name.slice(0, 1).toUpperCase()}</span>
+        <Avatar name={session.name} title={`Signed in as ${session.name}`} />
       </header>
 
-      <div className="body">
+      {view === "board" && (
+        <Board collab={collab} session={session} files={files} peers={peers} onOpenFile={(p) => openFile(p)} />
+      )}
+      <div className="body" hidden={view === "board"}>
         {sidebar && (
           <aside className="sidebar">
             <div className="sidebar-head">
@@ -330,6 +397,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               openPath={openPath}
               mainFile={project.mainFile}
               dirty={dirty}
+              peersByFile={peersByFile}
               onOpen={(p) => openFile(p)}
               onAction={(a, p) => void onTreeAction(a, p)}
               onDropFiles={(dir, list) => void uploadTo(dir, list)}
@@ -342,7 +410,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
             <div className="pane-tab">
               <Icon name={binaryOpen ? (binaryOpen.endsWith(".pdf") ? "pdf" : "image") : "file"} size={13} className="muted" />
               <span>{openPath}</span>
-              {openPath && dirty.has(openPath) && <span className="dot" />}
+              {openPath && dirty.has(openPath) && <span className="dot" title="Sending edits…" />}
+              {openPath && peersByFile.get(openPath)?.map((p) => <Avatar key={p.clientId} name={p.user.name} size="xs" title={`${p.user.name} is here${p.line ? ` (line ${p.line})` : ""}`} />)}
               <div className="spacer" />
               {!binaryOpen && <span className="muted small">{MOD}J jump to PDF · double-click PDF to jump back</span>}
             </div>
@@ -351,14 +420,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                 <div className="fill" hidden={!!binaryOpen}>
                   <Editor
                     ref={editor}
-                    projectId={projectId}
+                    collab={collab}
                     path={textPath}
                     revealAt={revealAt}
-                    onDirtyChange={(p, d) => setDirty((prev) => {
-                      const next = new Set(prev);
-                      d ? next.add(p) : next.delete(p);
-                      return next;
-                    })}
+                    onCursor={(line) => collab.setPresence({ line })}
                     onCompile={compile}
                     onForwardSync={(p, l) => void forwardSync(p, l)}
                     onError={notify}
@@ -401,7 +466,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         }}
       />
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
-      {historyOpen && <HistoryPanel projectId={projectId} onClose={() => setHistoryOpen(false)} beforeCheckpoint={() => editor.current?.saveAll() ?? Promise.resolve()} />}
+      {historyOpen && <HistoryPanel projectId={projectId} onClose={() => setHistoryOpen(false)} beforeCheckpoint={() => collab.flush()} />}
       {prompt && <PromptDialog req={prompt} onDone={() => setPrompt(null)} />}
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </div>

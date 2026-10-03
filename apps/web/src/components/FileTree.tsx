@@ -2,6 +2,8 @@ import { useMemo, useState, type DragEvent, type MouseEvent } from "react";
 import { isTextPath, type FileEntry } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
 import { load, save } from "../lib/storage.ts";
+import type { Peer } from "../lib/collab.ts";
+import { Avatar } from "./Presence.tsx";
 
 export type TreeAction = "newFile" | "newFolder" | "upload" | "rename" | "delete" | "setMain";
 
@@ -13,6 +15,7 @@ interface Props {
   openPath: string | null;
   mainFile: string;
   dirty: Set<string>;
+  peersByFile: Map<string, Peer[]>;
   onOpen(path: string): void;
   onAction(action: TreeAction, path: string): void;
   onDropFiles(dir: string, files: File[]): void;
@@ -42,7 +45,7 @@ function fileIcon(path: string) {
   return "file";
 }
 
-export function FileTree({ projectId, files, openPath, mainFile, dirty, onOpen, onAction, onDropFiles }: Props) {
+export function FileTree({ projectId, files, openPath, mainFile, dirty, peersByFile, onOpen, onAction, onDropFiles }: Props) {
   const tree = useMemo(() => buildTree(files), [files]);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(load<string[]>(`collapsed:${projectId}`, [])));
   const [menu, setMenu] = useState<{ x: number; y: number; node: Node | null } | null>(null);
@@ -104,7 +107,8 @@ export function FileTree({ projectId, files, openPath, mainFile, dirty, onOpen, 
           <Icon name={fileIcon(n.path)} size={14} className="tree-icon" />
           <span className={`tree-name ${isTextPath(n.path) ? "" : "muted"}`}>{n.name}</span>
           {n.path === mainFile && <span className="badge">main</span>}
-          {dirty.has(n.path) && <span className="dot" title="Unsaved changes" />}
+          {peersByFile.get(n.path)?.slice(0, 3).map((p) => <Avatar key={p.clientId} name={p.user.name} size="xs" title={`${p.user.name} is editing`} />)}
+          {dirty.has(n.path) && <span className="dot" title="Sending edits…" />}
         </button>
       );
     });

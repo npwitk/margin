@@ -10,8 +10,14 @@
     "test": "node --import tsx --test src/*.test.ts"
   },
   "dependencies": {
+    "@hocuspocus/server": "^4.7.0",
     "@hono/node-server": "^1.13.0",
     "@margin/shared": "*",
-    "hono": "^4.6.0"
+    "hono": "^4.6.0",
+    "ws": "^8.22.0",
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
   }
 }

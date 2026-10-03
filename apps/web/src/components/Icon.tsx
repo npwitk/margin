@@ -21,6 +21,7 @@ const PATHS: Record<string, string> = {
   star: "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z",
   bookmark: "M6 3h12v18l-6-4-6 4z",
   target: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  board: "M4 4h5v16H4zM10 4h5v10h-5zM16 4h4v7h-4z",
   terminal: "M4 6l6 6-6 6M12 18h8",
 };
 

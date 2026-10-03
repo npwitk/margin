@@ -4,7 +4,9 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
+import type { Server } from "node:http";
 import { authRoutes, requireSession, type AppEnv } from "./auth.ts";
+import { attachCollab, shutdownCollab } from "./collab.ts";
 import { DATA_DIR, PASSWORD, WEB_DIST } from "./config.ts";
 import { projectRoutes } from "./routes.ts";
 
@@ -26,6 +28,14 @@ app.get("*", async (c) => {
 });
 
 const port = Number(process.env.PORT ?? 8787);
-serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? "0.0.0.0" }, () => {
+const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? "0.0.0.0" }, () => {
   console.log(`margin server on :${port} (data: ${DATA_DIR}, auth: ${PASSWORD ? "password" : "OPEN — dev only"})`);
 });
+attachCollab(server as Server);
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, async () => {
+    await shutdownCollab().catch((err) => console.error("shutdown:", err));
+    process.exit(0);
+  });
+}

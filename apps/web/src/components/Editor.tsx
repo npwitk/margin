@@ -1,38 +1,37 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { basicSetup } from "codemirror";
-import { EditorState, Prec, type Extension } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
-import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
+import { defaultKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  HighlightStyle, StreamLanguage, bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting,
+} from "@codemirror/language";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
+import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
+import { EditorSelection, EditorState, Prec } from "@codemirror/state";
+import {
+  EditorView, crosshairCursor, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter,
+  highlightSpecialChars, keymap, lineNumbers, rectangularSelection,
+} from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
-import { ApiError, api } from "../lib/api.ts";
+import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
+import * as Y from "yjs";
+import type { ProjectCollab } from "../lib/collab.ts";
 
 export interface EditorHandle {
-  /** Persist every file with unsaved edits. Resolves false if any save failed. */
-  saveAll(): Promise<boolean>;
-  hasUnsaved(): boolean;
-  /** Drop cached state for a path (after rename/delete). */
+  /** Resolve once the server has every local edit. */
+  flush(): Promise<void>;
+  /** Drop per-file state after rename/delete. */
   forget(path: string): void;
 }
 
 interface Props {
-  projectId: string;
+  collab: ProjectCollab;
   path: string;
   revealAt?: { line: number; key: number };
-  onDirtyChange(path: string, dirty: boolean): void;
   onCompile(): void;
   onForwardSync(path: string, line: number): void;
+  onCursor(line: number): void;
   onError(message: string): void;
 }
-
-interface Doc {
-  state: EditorState;
-  saved: string;
-  etag: string;
-  dirty: boolean;
-}
-
-const AUTOSAVE_MS = 1200;
 
 const highlight = HighlightStyle.define([
   { tag: t.tagName, color: "var(--syn-command)" },
@@ -60,93 +59,31 @@ const theme = EditorView.theme({
   ".cm-panels": { backgroundColor: "var(--panel)", color: "var(--text)", borderColor: "var(--border)" },
   ".cm-searchMatch": { backgroundColor: "var(--search-match)" },
   ".cm-tooltip": { backgroundColor: "var(--panel)", border: "1px solid var(--border)", borderRadius: "8px" },
-  ".cm-flash-line": { backgroundColor: "var(--accent-soft)", transition: "background-color 1s" },
+  // Teammates' cursors (y-codemirror).
+  ".cm-ySelectionInfo": {
+    fontFamily: "var(--font)", fontSize: "10.5px", fontWeight: "600", padding: "1px 5px", borderRadius: "4px 4px 4px 0",
+    top: "-1.35em", opacity: "1", transitionDelay: "0s",
+  },
+  ".cm-ySelectionCaret": { borderLeftWidth: "2px" },
 });
+
+/** basicSetup minus its history: undo/redo comes from Yjs so it only undoes *your* edits. */
+const setup = [
+  lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), foldGutter(), drawSelection(), dropCursor(),
+  EditorState.allowMultipleSelections.of(true), indentOnInput(), bracketMatching(), closeBrackets(), autocompletion(),
+  rectangularSelection(), crosshairCursor(), highlightActiveLine(), highlightSelectionMatches(),
+  keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...foldKeymap, ...completionKeymap, ...yUndoManagerKeymap, indentWithTab]),
+];
 
 export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
-  const docs = useRef(new Map<string, Doc>());
   const current = useRef<string | null>(null);
-  const timers = useRef(new Map<string, number>());
+  const undo = useRef(new Map<string, Y.UndoManager>());
+  const selections = useRef(new Map<string, EditorSelection>());
   const pendingReveal = useRef<number | null>(null);
-  // Latest props for callbacks captured inside CodeMirror extensions.
   const p = useRef(props);
   p.current = props;
-
-  const save = async (path: string): Promise<boolean> => {
-    const doc = docs.current.get(path);
-    if (!doc) return true;
-    window.clearTimeout(timers.current.get(path));
-    const text = doc.state.doc.toString();
-    if (text === doc.saved) return true;
-    try {
-      const { etag } = await api.writeFile(p.current.projectId, path, text, doc.etag);
-      doc.saved = text;
-      doc.etag = etag;
-      setDirty(path, doc.state.doc.toString() !== text);
-      return true;
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409) return resolveConflict(path, doc, text);
-      p.current.onError(`Couldn't save ${path}: ${(err as Error).message}`);
-      return false;
-    }
-  };
-
-  const resolveConflict = async (path: string, doc: Doc, mine: string): Promise<boolean> => {
-    const keepMine = window.confirm(
-      `${path} was changed by someone else since you opened it.\n\nOK — overwrite with your version\nCancel — discard yours and load theirs`,
-    );
-    if (keepMine) {
-      const { etag } = await api.writeFile(p.current.projectId, path, mine);
-      doc.saved = mine;
-      doc.etag = etag;
-      setDirty(path, false);
-    } else {
-      const fresh = await api.readFile(p.current.projectId, path);
-      doc.saved = fresh.content;
-      doc.etag = fresh.etag;
-      doc.state = doc.state.update({ changes: { from: 0, to: doc.state.doc.length, insert: fresh.content } }).state;
-      if (current.current === path) view.current?.setState(doc.state);
-      setDirty(path, false);
-    }
-    return true;
-  };
-
-  const setDirty = (path: string, dirty: boolean) => {
-    const doc = docs.current.get(path);
-    if (!doc || doc.dirty === dirty) return;
-    doc.dirty = dirty;
-    p.current.onDirtyChange(path, dirty);
-  };
-
-  const extensions = useRef<Extension[]>([
-    basicSetup,
-    StreamLanguage.define(stex),
-    syntaxHighlighting(highlight),
-    EditorView.lineWrapping,
-    theme,
-    Prec.highest(keymap.of([
-      { key: "Mod-s", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
-      { key: "Mod-Enter", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
-      {
-        key: "Mod-j", preventDefault: true, run: (v) => {
-          if (current.current) p.current.onForwardSync(current.current, v.state.doc.lineAt(v.state.selection.main.head).number);
-          return true;
-        },
-      },
-    ])),
-    EditorView.updateListener.of((u) => {
-      const path = current.current;
-      const doc = path ? docs.current.get(path) : undefined;
-      if (!path || !doc) return;
-      doc.state = u.state;
-      if (!u.docChanged) return;
-      setDirty(path, u.state.doc.toString() !== doc.saved);
-      window.clearTimeout(timers.current.get(path));
-      timers.current.set(path, window.setTimeout(() => void save(path), AUTOSAVE_MS));
-    }),
-  ]);
 
   const reveal = (line: number) => {
     const v = view.current;
@@ -159,59 +96,86 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
   useEffect(() => {
     view.current = new EditorView({ parent: host.current! });
     return () => {
-      for (const path of docs.current.keys()) void save(path);
       view.current?.destroy();
       view.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Swap documents when the open file changes.
   useEffect(() => {
     let cancelled = false;
-    const open = async () => {
-      let doc = docs.current.get(props.path);
-      if (!doc) {
-        try {
-          const { content, etag } = await api.readFile(props.projectId, props.path);
-          if (cancelled) return;
-          doc = { state: EditorState.create({ doc: content, extensions: extensions.current }), saved: content, etag, dirty: false };
-          docs.current.set(props.path, doc);
-        } catch (err) {
-          p.current.onError(`Couldn't open ${props.path}: ${(err as Error).message}`);
-          return;
-        }
+    const path = props.path;
+    (async () => {
+      let provider;
+      try {
+        provider = await props.collab.open(path);
+      } catch (err) {
+        if (!cancelled) p.current.onError((err as Error).message);
+        return;
       }
-      current.current = props.path;
-      view.current!.setState(doc.state);
+      if (cancelled || !view.current) return;
+      const v = view.current;
+      if (current.current) selections.current.set(current.current, v.state.selection);
+
+      const ytext = provider.document.getText("content");
+      let um = undo.current.get(path);
+      if (!um) {
+        um = new Y.UndoManager(ytext);
+        undo.current.set(path, um);
+      }
+      const doc = ytext.toString();
+      const saved = selections.current.get(path);
+      const selection = saved && saved.main.head <= doc.length ? saved : undefined;
+
+      v.setState(EditorState.create({
+        doc,
+        selection,
+        extensions: [
+          setup,
+          StreamLanguage.define(stex),
+          syntaxHighlighting(highlight),
+          EditorView.lineWrapping,
+          theme,
+          yCollab(ytext, provider.awareness, { undoManager: um }),
+          Prec.highest(keymap.of([
+            { key: "Mod-s", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
+            { key: "Mod-Enter", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
+            {
+              key: "Mod-j", preventDefault: true, run: (ev) => {
+                p.current.onForwardSync(path, ev.state.doc.lineAt(ev.state.selection.main.head).number);
+                return true;
+              },
+            },
+          ])),
+          EditorView.updateListener.of((u) => {
+            if (u.selectionSet || u.docChanged) p.current.onCursor(u.state.doc.lineAt(u.state.selection.main.head).number);
+          }),
+        ],
+      }));
+      current.current = path;
       if (pendingReveal.current) {
         reveal(pendingReveal.current);
         pendingReveal.current = null;
       } else {
-        view.current!.focus();
+        if (selection) v.dispatch({ effects: EditorView.scrollIntoView(selection.main.head, { y: "center" }) });
+        v.focus();
       }
-    };
-    void open();
+    })();
     return () => { cancelled = true; };
-  }, [props.projectId, props.path]);
+  }, [props.collab, props.path]);
 
   useEffect(() => {
     if (!props.revealAt) return;
-    if (current.current === props.path && docs.current.has(props.path)) reveal(props.revealAt.line);
+    if (current.current === props.path) reveal(props.revealAt.line);
     else pendingReveal.current = props.revealAt.line;
   }, [props.revealAt]);
 
   useImperativeHandle(ref, () => ({
-    async saveAll() {
-      const results = await Promise.all([...docs.current.keys()].map(save));
-      return results.every(Boolean);
-    },
-    hasUnsaved() {
-      return [...docs.current.values()].some((d) => d.dirty);
-    },
+    flush: () => p.current.collab.flush(),
     forget(path) {
-      window.clearTimeout(timers.current.get(path));
-      docs.current.delete(path);
+      undo.current.get(path)?.destroy();
+      undo.current.delete(path);
+      selections.current.delete(path);
+      if (current.current === path) current.current = null;
     },
   }));
 
