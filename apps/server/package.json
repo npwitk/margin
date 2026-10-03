@@ -1,0 +1,17 @@
+{
+  "name": "@margin/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "DATA_DIR=../../.data PORT=8787 COMPILE_URL=http://127.0.0.1:8788 tsx watch src/index.ts",
+    "start": "node --import tsx src/index.ts",
+    "typecheck": "tsc -p .",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@margin/shared": "*",
+    "hono": "^4.6.0"
+  }
+}

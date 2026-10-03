@@ -1,0 +1,27 @@
+{
+  "name": "margin",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source, AI-native LaTeX research workspace",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,compile,web -c blue,magenta,green \"npm run dev -w @margin/server\" \"npm run dev -w @margin/compile\" \"npm run dev -w @margin/web\"",
+    "build": "npm run build -w @margin/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.10.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

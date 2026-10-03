@@ -1,0 +1,58 @@
+# Run from the repo root:  docker compose -f deploy/docker-compose.yml --env-file .env up -d --build
+name: margin
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      MARGIN_DOMAIN: ${MARGIN_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    networks: [public]
+    depends_on: [server]
+
+  server:
+    build: { context: .., dockerfile: apps/server/Dockerfile }
+    restart: unless-stopped
+    environment:
+      MARGIN_PASSWORD: ${MARGIN_PASSWORD:?set MARGIN_PASSWORD in .env}
+      MARGIN_SECRET: ${MARGIN_SECRET:?set MARGIN_SECRET in .env}
+      COMPILE_URL: http://compile:8788
+      COMPILE_TOKEN: ${COMPILE_TOKEN:-margin-internal}
+    volumes:
+      - data:/data
+    networks: [public, sandbox]
+
+  # The LaTeX sandbox: no internet, read-only root, non-root user, capped resources.
+  # It only sees build copies of projects, never the git repos.
+  compile:
+    build:
+      context: ..
+      dockerfile: apps/compile/Dockerfile
+      args: { TEXLIVE_IMAGE: "${TEXLIVE_IMAGE:-texlive/texlive:latest-full}" }
+    restart: unless-stopped
+    environment:
+      COMPILE_TOKEN: ${COMPILE_TOKEN:-margin-internal}
+      COMPILE_TIMEOUT_MS: "90000"
+    volumes:
+      - data:/data:rw
+    read_only: true
+    tmpfs: ["/tmp:size=256m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256
+    networks: [sandbox]
+
+networks:
+  public: {}
+  sandbox:
+    internal: true   # no route to the internet
+
+volumes:
+  data: {}
+  caddy-data: {}
