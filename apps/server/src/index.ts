@@ -7,8 +7,9 @@ import { logger } from "hono/logger";
 import type { Server } from "node:http";
 import { authRoutes, requireSession, type AppEnv } from "./auth.ts";
 import { attachCollab, shutdownCollab } from "./collab.ts";
-import { DATA_DIR, PASSWORD, WEB_DIST } from "./config.ts";
-import { projectRoutes } from "./routes.ts";
+import { DATA_DIR, GITHUB, OPEN_ACCESS, PASSWORD, WEB_DIST } from "./config.ts";
+import { handleGit } from "./gitHttp.ts";
+import { projectRoutes, tokenRoutes } from "./routes.ts";
 
 const app = new Hono<AppEnv>();
 app.use("*", logger());
@@ -17,6 +18,12 @@ app.get("/api/health", (c) => c.json({ ok: true }));
 app.route("/api", authRoutes);
 app.use("/api/projects/*", requireSession);
 app.route("/api/projects", projectRoutes);
+app.use("/api/tokens/*", requireSession);
+app.use("/api/tokens", requireSession);
+app.route("/api/tokens", tokenRoutes);
+
+// Git smart HTTP: authenticated with access tokens, not the session cookie.
+app.all("/git/*", (c) => handleGit(c));
 app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
 // Production: serve the built web app, falling back to index.html for client routes.
@@ -29,7 +36,7 @@ app.get("*", async (c) => {
 
 const port = Number(process.env.PORT ?? 8787);
 const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? "0.0.0.0" }, () => {
-  console.log(`margin server on :${port} (data: ${DATA_DIR}, auth: ${PASSWORD ? "password" : "OPEN — dev only"})`);
+  console.log(`margin server on :${port} (data: ${DATA_DIR}, auth: ${OPEN_ACCESS ? "OPEN — dev only" : [PASSWORD && "password", GITHUB && "github"].filter(Boolean).join(" + ")})`);
 });
 attachCollab(server as Server);
 

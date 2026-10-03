@@ -18,8 +18,12 @@ services:
     build: { context: .., dockerfile: apps/server/Dockerfile }
     restart: unless-stopped
     environment:
-      MARGIN_PASSWORD: ${MARGIN_PASSWORD:?set MARGIN_PASSWORD in .env}
+      MARGIN_PASSWORD: ${MARGIN_PASSWORD:-}
       MARGIN_SECRET: ${MARGIN_SECRET:?set MARGIN_SECRET in .env}
+      MARGIN_PUBLIC_URL: https://${MARGIN_DOMAIN:-localhost}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      MARGIN_GITHUB_ALLOW: ${MARGIN_GITHUB_ALLOW:-}
       COMPILE_URL: http://compile:8788
       COMPILE_TOKEN: ${COMPILE_TOKEN:-margin-internal}
     volumes:

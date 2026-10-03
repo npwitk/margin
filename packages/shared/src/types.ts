@@ -56,6 +56,16 @@ export interface Checkpoint {
 
 export interface Session {
   name: string;
+  /** GitHub login, when signed in with GitHub. */
+  github?: string;
+  avatar?: string;
+}
+
+export interface AuthMethods {
+  password: boolean;
+  github: boolean;
+  /** No login configured at all (local development only). */
+  open: boolean;
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -101,7 +111,7 @@ export interface Task {
 
 /** What each connected member broadcasts on the project room's awareness. */
 export interface PresenceState {
-  user: { name: string; color: string };
+  user: { name: string; color: string; avatar?: string };
   file?: string | null;
   line?: number;
   view?: "write" | "board";

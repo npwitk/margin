@@ -1,6 +1,8 @@
 import type {
-  Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
+  AuthMethods, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
+
+export interface AccessToken { id: string; label: string; createdAt: string; lastUsedAt?: string }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -24,7 +26,7 @@ const q = (p: string) => encodeURIComponent(p);
 const P = (id: string) => `/projects/${id}`;
 
 export const api = {
-  session: () => req<{ session: Session | null; passwordRequired: boolean }>("/session"),
+  session: () => req<{ session: Session | null; passwordRequired: boolean; methods: AuthMethods }>("/session"),
   login: (name: string, password: string) => req<{ session: Session }>("/login", json("POST", { name, password })),
   logout: () => req("/logout", json("POST")),
 
@@ -55,6 +57,10 @@ export const api = {
     req<SyncTexForward | null>(`${P(id)}/synctex/forward?file=${q(file)}&line=${line}`),
   inverse: (id: string, page: number, x: number, y: number) =>
     req<SyncTexInverse | null>(`${P(id)}/synctex/inverse?page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}`),
+
+  tokens: () => req<AccessToken[]>("/tokens"),
+  createToken: (label: string) => req<AccessToken & { token: string }>("/tokens", json("POST", { label })),
+  revokeToken: (tid: string) => req(`/tokens/${tid}`, { method: "DELETE" }),
 
   history: (id: string) => req<Checkpoint[]>(`${P(id)}/history`),
   checkpoint: (id: string, message: string) => req<{ checkpoint: Checkpoint | null }>(`${P(id)}/checkpoint`, json("POST", { message })),

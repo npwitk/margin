@@ -65,8 +65,12 @@ function target(name: string): { projectId: string; path: string; file: string; 
   return { ...parsed, file: resolvePath(parsed.projectId, parsed.path), room: false };
 }
 
+/** Projects whose working tree git is updating right now; disk writes wait. */
+const paused = new Set<string>();
+
 async function persist(name: string, doc: Y.Doc, { withState = true } = {}) {
   const t = target(name);
+  if (paused.has(t.projectId)) return;
   if (t.room) {
     const json = JSON.stringify({ tasks: boardFromDoc(doc) }, null, 2) + "\n";
     if ((await readFile(t.file, "utf8").catch(() => "")) !== json) await writeAtomic(t.file, json);
@@ -154,6 +158,53 @@ export async function writeThroughCollab(projectId: string, rel: string, content
   } finally {
     await conn.disconnect();
   }
+}
+
+/** Run a function against a file's live document (loading it if needed); changes reach every editor. */
+export async function withDoc<T>(projectId: string, rel: string, session: Session, fn: (doc: Y.Doc) => T): Promise<T> {
+  const conn = await hocuspocus.openDirectConnection(docName(projectId, rel), { session });
+  let result!: T;
+  try {
+    await conn.transact((doc) => { result = fn(doc); });
+  } finally {
+    await conn.disconnect();
+  }
+  return result;
+}
+
+// ── Git push integration ──────────────────────────────────────────────────
+
+/** Stop writing a project's documents to disk (while git rewrites its working tree). */
+export async function pauseProject(projectId: string) {
+  await flushProject(projectId);
+  paused.add(projectId);
+}
+
+export async function resumeProject(projectId: string) {
+  paused.delete(projectId);
+  await flushProject(projectId);
+}
+
+/** The live document for a project path (a text file, or ROOM for the board), if open. */
+export function liveDoc(projectId: string, rel: string): Y.Doc | undefined {
+  return hocuspocus.documents.get(docName(projectId, rel));
+}
+
+/**
+ * Change a live document as of a snapshot: take `state`, apply `fn` on a fork,
+ * and merge the result in. Edits made after the snapshot are preserved by Yjs.
+ */
+export function mergeIntoLive(doc: Y.Doc, state: Uint8Array, fn: (fork: Y.Doc) => void) {
+  const fork = new Y.Doc();
+  Y.applyUpdate(fork, state);
+  fn(fork);
+  Y.applyUpdate(doc, Y.encodeStateAsUpdate(fork, Y.encodeStateVectorFromUpdate(state)));
+}
+
+/** Close a document whose file is gone and drop its cached state. */
+export async function dropDoc(projectId: string, rel: string) {
+  hocuspocus.closeConnections(docName(projectId, rel));
+  await rm(ystatePath(docName(projectId, rel)), { force: true });
 }
 
 /** Before a file or folder is renamed/deleted: save, disconnect editors and drop cached CRDT state. */

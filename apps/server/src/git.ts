@@ -4,6 +4,15 @@ import type { Checkpoint } from "@margin/shared";
 
 const exec = promisify(execFile);
 
+const locks = new Map<string, Promise<unknown>>();
+/** Serialize git operations on one project (checkpoints, fetch syncs, pushes). */
+export function withGitLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+  const next = (locks.get(projectId) ?? Promise.resolve()).catch(() => {}).then(fn);
+  locks.set(projectId, next);
+  void next.finally(() => { if (locks.get(projectId) === next) locks.delete(projectId); }).catch(() => {});
+  return next;
+}
+
 function git(cwd: string, args: string[]) {
   return exec("git", args, {
     cwd,

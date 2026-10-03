@@ -15,12 +15,17 @@ import { tags as t } from "@lezer/highlight";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import * as Y from "yjs";
 import type { ProjectCollab } from "../lib/collab.ts";
+import { reviewDecorations } from "../lib/review.ts";
 
 export interface EditorHandle {
   /** Resolve once the server has every local edit. */
   flush(): Promise<void>;
   /** Drop per-file state after rename/delete. */
   forget(path: string): void;
+  /** The current selection, or null if nothing is selected. */
+  selection(): { from: number; to: number; text: string } | null;
+  /** Select and scroll to a range. */
+  select(from: number, to: number): void;
 }
 
 interface Props {
@@ -30,6 +35,8 @@ interface Props {
   onCompile(): void;
   onForwardSync(path: string, line: number): void;
   onCursor(line: number): void;
+  onComment(): void;
+  onThreadClick(id: string): void;
   onError(message: string): void;
 }
 
@@ -136,9 +143,11 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
           EditorView.lineWrapping,
           theme,
           yCollab(ytext, provider.awareness, { undoManager: um }),
+          reviewDecorations(provider.document, (id) => p.current.onThreadClick(id)),
           Prec.highest(keymap.of([
             { key: "Mod-s", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
             { key: "Mod-Enter", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
+            { key: "Mod-Alt-m", preventDefault: true, run: () => { p.current.onComment(); return true; } },
             {
               key: "Mod-j", preventDefault: true, run: (ev) => {
                 p.current.onForwardSync(path, ev.state.doc.lineAt(ev.state.selection.main.head).number);
@@ -176,6 +185,19 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
       undo.current.delete(path);
       selections.current.delete(path);
       if (current.current === path) current.current = null;
+    },
+    selection() {
+      const v = view.current;
+      const sel = v?.state.selection.main;
+      if (!v || !sel || sel.empty) return null;
+      return { from: sel.from, to: sel.to, text: v.state.sliceDoc(sel.from, sel.to) };
+    },
+    select(from, to) {
+      const v = view.current;
+      if (!v) return;
+      const len = v.state.doc.length;
+      v.dispatch({ selection: { anchor: Math.min(from, len), head: Math.min(to, len) }, effects: EditorView.scrollIntoView(Math.min(from, len), { y: "center" }) });
+      v.focus();
     },
   }));
 

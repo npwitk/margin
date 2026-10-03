@@ -14,14 +14,14 @@ export interface Peer extends PresenceState {
 export class ProjectCollab {
   readonly socket: HocuspocusProviderWebsocket;
   readonly room: HocuspocusProvider;
-  readonly user: { name: string; color: string; colorLight: string };
+  readonly user: { name: string; color: string; colorLight: string; avatar?: string };
   private docs = new Map<string, HocuspocusProvider>();
   private ready = new Map<string, Promise<HocuspocusProvider>>();
   private syncListeners = new Set<() => void>();
 
   constructor(readonly projectId: string, session: Session) {
     const color = colorFor(session.name);
-    this.user = { name: session.name, color, colorLight: `${color}33` };
+    this.user = { name: session.name, color, colorLight: `${color}33`, avatar: session.avatar };
     const proto = location.protocol === "https:" ? "wss" : "ws";
     this.socket = new HocuspocusProviderWebsocket({ url: `${proto}://${location.host}/api/collab` });
     this.room = this.provider(ROOM);

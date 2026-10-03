@@ -2,7 +2,7 @@
 
 An open-source, AI-native LaTeX workspace for research groups. Write, compile and review papers together. Agents like Claude Code and Codex work alongside you as visible teammates.
 
-> Working name. Status: **P1 in progress**: live collaboration and the project board work.
+> Working name. Status: **P1 complete**. Next up: P2 (AI).
 
 ## What works today (P0)
 - Projects stored as **git repos** you own; checkpoints are commits credited to each member
@@ -20,7 +20,17 @@ An open-source, AI-native LaTeX workspace for research groups. Write, compile an
 - **Presence:** see who's in the project and which file and line they're on. Click an avatar to follow them.
 - **Board:** To do → In progress → In review → Done. Tasks have assignees, linked files and due dates. A card is marked **LIVE** while its assignee is in one of its files. Saved to `.margin/board.json` in the repo.
 - **Shared preview:** when anyone compiles, everyone's PDF refreshes.
-- **Safe external writes:** REST writes (scripts, and agents later) merge into the live document; stale writes are refused with a 409.
+- **Comments and suggested edits:** select text and press `⌘⌥M`. Comments stay attached to their words as the text changes. Suggestions show inline (old text struck through, new text next to it) and are accepted with one click.
+- **Work locally with git:** `git clone https://<host>/git/<project>.git`, using a personal access token (**Local** button) as the password. Pulls include teammates' live edits. A push is 3-way merged into the live document, so it isn't rejected because someone was typing. Force pushes are refused.
+- **Sign-in:** GitHub (restricted to `MARGIN_GITHUB_ALLOW`), a shared group password, or both.
+- **Safe external writes:** REST writes (scripts, agents) merge into the live document; stale writes are refused with a 409.
+
+### Review API (for scripts and agents)
+```
+GET  /api/projects/:id/review?path=sections/method.tex        list threads (with line numbers)
+POST /api/projects/:id/review   {path, quote, kind: "comment"|"suggestion", message?, replacement?}
+POST /api/projects/:id/review/:thread   {path, action: "reply"|"accept"|"resolved"|"rejected"|"open", text?}
+```
 
 Collab runs inside the API server (Hocuspocus over `/api/collab`). Files on disk stay the source of truth for compile and git. CRDT state is cached in `DATA_DIR/ystate`, so reconnecting clients merge instead of duplicating text.
 
@@ -35,7 +45,7 @@ Open http://localhost:5173. Data lives in `.data/`. In dev, auth is open unless 
 ## Deploy on your domain
 On any VPS with Docker:
 ```sh
-cp .env.example .env        # set MARGIN_DOMAIN, MARGIN_PASSWORD, MARGIN_SECRET (openssl rand -hex 32)
+cp .env.example .env        # MARGIN_DOMAIN, MARGIN_SECRET (openssl rand -hex 32), and a password and/or GitHub app
 docker compose -f deploy/docker-compose.yml --env-file .env up -d --build
 ```
 Point your domain's DNS A record at the server; Caddy fetches TLS automatically. The first build pulls TeX Live (~5 GB for `latest-full`).
@@ -59,7 +69,7 @@ LaTeX can read files and run commands, so each compile:
 Before public sign-ups: per-job containers (or gVisor/Firecracker) so projects can't see each other's build dirs.
 
 ## Roadmap
-- **P1, collaboration:** ~~live editing, presence, project board~~ ✓ · next: comments and suggestions, git remote for `git clone`, GitHub OAuth
+- **P1, collaboration:** ✓ live editing, presence, board, comments and suggestions, git remote, GitHub sign-in
 - **P2, AI:** a built-in agent with tools (bring your own key), compile-error fixer, goal-based reviewer skills (`skills/*.md`), citation checker (Crossref/OpenAlex), reference library
 - **P3, external agents:** a `margin-mcp` server so Claude Code and Codex claim board tasks and edit live as "Claude for <member>"
 - **P4:** idea → paper workflow, Overleaf/arXiv import, public launch, Tauri desktop app

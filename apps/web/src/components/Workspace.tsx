@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isTextPath, type CompileResult, type Diagnostic, type Engine, type FileEntry, type Project, type Session, type SyncTexForward } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
+import { useThreads } from "../lib/review.ts";
+import { ReviewPanel, type Draft } from "./ReviewPanel.tsx";
+import { LocalDialog } from "./LocalDialog.tsx";
 import { navigate } from "../lib/router.ts";
 import { load, save } from "../lib/storage.ts";
 import { CommandPalette, type Command } from "./CommandPalette.tsx";
@@ -37,6 +40,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [showProblems, setShowProblems] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
   const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   const [highlight, setHighlight] = useState<SyncTexForward & { key: number }>();
   const [toast, setToast] = useState<string | null>(null);
@@ -46,6 +50,13 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   const collab = useCollab(projectId, session);
   const peers = usePeers(collab);
+  const [reviewOpen, setReviewOpen] = useState(() => load("review", false));
+  const [activeThread, setActiveThread] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const { doc: reviewDoc, threads } = useThreads(collab, textPath);
+  const openThreads = threads.filter((t) => t.status === "open").length;
+  useEffect(() => save("review", reviewOpen), [reviewOpen]);
+  useEffect(() => { setDraft(null); setActiveThread(null); }, [textPath]);
 
   const editor = useRef<EditorHandle>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
@@ -275,6 +286,13 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     return m;
   }, [peers]);
 
+  const startComment = (kind: Draft["kind"] = "comment") => {
+    const sel = editor.current?.selection();
+    if (!sel) { notify("Select some text first, then comment or suggest an edit"); return; }
+    setDraft({ from: sel.from, to: sel.to, quote: sel.text, kind });
+    setReviewOpen(true);
+  };
+
   const openDiagnostic = (d: Diagnostic) => d.file && openFile(d.file, d.line);
 
   const setEngine = async (engine: Engine) => {
@@ -315,10 +333,14 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       { id: "compile", label: "Compile", section: "Action", icon: "play", hint: `${MOD}S`, run: compile },
       { id: "checkpoint", label: "Create checkpoint…", section: "Action", icon: "history", run: () => setHistoryOpen(true) },
       { id: "board", label: view === "board" ? "Back to writing" : "Open board", section: "View", icon: "board", hint: `${MOD}⇧B`, run: () => setView((v) => (v === "board" ? "write" : "board")) },
+      { id: "comment", label: "Comment on selection", section: "Review", icon: "comment", hint: `${MOD}⌥M`, run: () => startComment("comment") },
+      { id: "suggest", label: "Suggest an edit to selection", section: "Review", icon: "comment", run: () => startComment("suggestion") },
+      { id: "review", label: reviewOpen ? "Hide review panel" : "Show review panel", section: "View", icon: "comment", run: () => setReviewOpen((o: boolean) => !o) },
       { id: "problems", label: showProblems ? "Hide problems" : "Show problems", section: "View", icon: "alert", run: () => setShowProblems((s) => !s) },
       { id: "sidebar", label: "Toggle sidebar", section: "View", icon: "folder", hint: `${MOD}B`, run: () => setSidebar((s: boolean) => !s) },
       { id: "newfile", label: "New file…", section: "Action", icon: "plus", run: () => void onTreeAction("newFile", "") },
       { id: "upload", label: "Upload files…", section: "Action", icon: "upload", run: () => void onTreeAction("upload", "") },
+      { id: "local", label: "Work locally (git clone, agents)…", section: "Project", icon: "terminal", run: () => setLocalOpen(true) },
       { id: "rename-project", label: "Rename project…", section: "Project", icon: "file", run: () => void renameProject() },
       { id: "projects", label: "Back to all projects", section: "Navigate", icon: "back", run: () => navigate({ name: "projects" }) },
     ];
@@ -333,7 +355,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     }
     return cmds;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, textPath, project, showProblems, view]);
+  }, [files, textPath, project, showProblems, view, reviewOpen]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   if (loadError) {
@@ -369,13 +391,14 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                 <><Icon name="check" size={13} />Clean</>}
           </button>
         )}
+        <button className="btn ghost" onClick={() => setLocalOpen(true)} title="Clone with git / work with agents"><Icon name="terminal" size={14} />Local</button>
         <button className="btn ghost" onClick={() => setHistoryOpen(true)} title="Checkpoints"><Icon name="history" size={14} />Checkpoint</button>
         <button className="btn ghost" onClick={() => setPaletteOpen(true)} title="Command palette"><kbd>{MOD}K</kbd></button>
         <button className="btn primary" onClick={compile} disabled={compiling} title={`Compile (${MOD}S)`}>
           {compiling ? <Spinner /> : <Icon name="play" size={13} />}
           {compiling ? "Compiling" : "Compile"}
         </button>
-        <Avatar name={session.name} title={`Signed in as ${session.name}`} />
+        <Avatar name={session.name} src={session.avatar} title={`Signed in as ${session.name}${session.github ? ` (@${session.github})` : ""}`} />
       </header>
 
       {view === "board" && (
@@ -407,15 +430,24 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
         <div className="panes">
           <section className="pane" ref={center} style={{ flexBasis: `${split * 100}%` }}>
-            <div className="pane-tab">
+            <div className={`pane-tab ${reviewOpen && !binaryOpen ? "with-review" : ""}`}>
               <Icon name={binaryOpen ? (binaryOpen.endsWith(".pdf") ? "pdf" : "image") : "file"} size={13} className="muted" />
               <span>{openPath}</span>
               {openPath && dirty.has(openPath) && <span className="dot" title="Sending edits…" />}
               {openPath && peersByFile.get(openPath)?.map((p) => <Avatar key={p.clientId} name={p.user.name} size="xs" title={`${p.user.name} is here${p.line ? ` (line ${p.line})` : ""}`} />)}
               <div className="spacer" />
-              {!binaryOpen && <span className="muted small">{MOD}J jump to PDF · double-click PDF to jump back</span>}
+              {!binaryOpen && <span className="muted small hint">{MOD}J jump to PDF · double-click PDF to jump back</span>}
+              {!binaryOpen && (
+                <>
+                  <button className="btn ghost tight" onClick={() => startComment()} title={`Comment on selection (${MOD}⌥M)`}><Icon name="comment" size={13} />Comment</button>
+                  <button className={`chip ${reviewOpen ? "active" : ""}`} onClick={() => setReviewOpen((o: boolean) => !o)} title="Review panel">
+                    Review{openThreads ? ` ${openThreads}` : ""}
+                  </button>
+                </>
+              )}
             </div>
-            <div className="pane-body">
+            <div className="pane-body row-layout">
+             <div className="editor-area">
               {textPath && (
                 <div className="fill" hidden={!!binaryOpen}>
                   <Editor
@@ -424,6 +456,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     path={textPath}
                     revealAt={revealAt}
                     onCursor={(line) => collab.setPresence({ line })}
+                    onComment={() => startComment()}
+                    onThreadClick={(id) => { setReviewOpen(true); setActiveThread(id); }}
                     onCompile={compile}
                     onForwardSync={(p, l) => void forwardSync(p, l)}
                     onError={notify}
@@ -436,6 +470,19 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               )}
               {binaryOpen && !/\.(pdf|png|jpe?g|gif|svg|webp)$/i.test(binaryOpen) && (
                 <div className="empty">No preview for this file type. <a href={api.rawUrl(projectId, binaryOpen)} download>Download</a></div>
+              )}
+             </div>
+              {reviewOpen && !binaryOpen && (
+                <ReviewPanel
+                  doc={reviewDoc}
+                  threads={threads}
+                  session={session}
+                  activeId={activeThread}
+                  draft={draft}
+                  onDraftDone={() => setDraft(null)}
+                  onActivate={(t) => { setActiveThread(t.id); if (t.from !== null && t.to !== null) editor.current?.select(t.from, t.to); }}
+                  onClose={() => setReviewOpen(false)}
+                />
               )}
             </div>
             {showProblems && result && <Problems result={result} onOpen={openDiagnostic} onClose={() => setShowProblems(false)} />}
@@ -467,6 +514,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       />
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       {historyOpen && <HistoryPanel projectId={projectId} onClose={() => setHistoryOpen(false)} beforeCheckpoint={() => collab.flush()} />}
+      {localOpen && <LocalDialog projectId={projectId} session={session} onClose={() => setLocalOpen(false)} />}
       {prompt && <PromptDialog req={prompt} onDone={() => setPrompt(null)} />}
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </div>

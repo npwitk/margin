@@ -22,6 +22,9 @@ const PATHS: Record<string, string> = {
   bookmark: "M6 3h12v18l-6-4-6 4z",
   target: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
   board: "M4 4h5v16H4zM10 4h5v10h-5zM16 4h4v7h-4z",
+  comment: "M4 5h16v11H9l-5 4z",
+  copy: "M9 9h11v11H9zM5 15H4V4h11v1",
+  key: "M15 7a4 4 0 1 1-3.9 5H8v3H5v-3H3v-3h8.1A4 4 0 0 1 15 7zM16 11h.01",
   terminal: "M4 6l6 6-6 6M12 18h8",
 };
 

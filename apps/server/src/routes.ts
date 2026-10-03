@@ -4,11 +4,15 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { isTextPath, type CompileResult } from "@margin/shared";
+import {
+  acceptSuggestion, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf,
+  type CompileResult, type ThreadKind, type ThreadStatus,
+} from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
 import { COMPILE_TOKEN, COMPILE_URL } from "./config.ts";
-import { emit, flushProject, liveText, releasePath, writeThroughCollab } from "./collab.ts";
-import { checkpoint, history } from "./git.ts";
+import { emit, flushProject, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
+import { checkpoint, history, withGitLock } from "./git.ts";
+import { createToken, listTokens, revokeToken } from "./tokens.ts";
 import {
   HttpError, createEntry, etagOf, createProject, deleteEntry, getProject, listFiles, listProjects, moveEntry,
   projectDir, readText, resolvePath, syncWorkDir, touchProject, updateProject, workDir, writeBinary, writeText,
@@ -39,6 +43,17 @@ async function currentText(id: string, rel: string) {
 function pdfFile(id: string, mainFile: string) {
   return path.join(workDir(id), "_out", `${path.basename(mainFile, ".tex")}.pdf`);
 }
+
+export const tokenRoutes = new Hono<AppEnv>()
+  .get("/", async (c) => c.json(await listTokens(c.get("session").name)))
+  .post("/", async (c) => {
+    const { label } = await c.req.json<{ label?: string }>().catch(() => ({ label: undefined }));
+    return c.json(await createToken(c.get("session").name, label ?? ""), 201);
+  })
+  .delete("/:tid", async (c) => {
+    const ok = await revokeToken(c.get("session").name, c.req.param("tid"));
+    return ok ? c.json({ ok: true }) : c.json({ error: "Token not found" }, 404);
+  });
 
 export const projectRoutes = new Hono<AppEnv>()
   .onError((err, c) => {
@@ -180,6 +195,57 @@ export const projectRoutes = new Hono<AppEnv>()
     return c.json(await compileWorker(`/synctex/inverse?${q}`));
   })
 
+  // ── Review threads (comments & suggestions) ─────────────────────────────
+  .get("/:id/review", async (c) => {
+    const id = c.req.param("id"), rel = c.req.query("path")!;
+    resolvePath(id, rel);
+    return c.json(await withDoc(id, rel, c.get("session"), (doc) => {
+      const text = textOf(doc).toString();
+      return listThreads(doc).map((t) => ({ ...t, line: t.from === null ? null : lineAt(text, t.from) }));
+    }));
+  })
+
+  // Anchor by exact `quote` (first match, optionally after `near` line) or by offsets.
+  .post("/:id/review", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      path: string; quote?: string; from?: number; to?: number; near?: number;
+      kind?: ThreadKind; message?: string; replacement?: string;
+    }>();
+    resolvePath(id, body.path);
+    const author = c.get("session").name;
+    const thread = await withDoc(id, body.path, c.get("session"), (doc) => {
+      const text = textOf(doc).toString();
+      let from = body.from, to = body.to;
+      if (body.quote !== undefined) {
+        const startAt = body.near ? text.split("\n").slice(0, body.near - 1).join("\n").length : 0;
+        let i = text.indexOf(body.quote, startAt);
+        if (i < 0) i = text.indexOf(body.quote);
+        if (i < 0) return null;
+        from = i;
+        to = i + body.quote.length;
+      }
+      if (from === undefined || to === undefined) return null;
+      return createThread(doc, { from, to, author, kind: body.kind, message: body.message, replacement: body.replacement });
+    });
+    if (!thread) throw new HttpError(400, "Couldn't find that text in the file");
+    return c.json(thread, 201);
+  })
+
+  .post("/:id/review/:thread", async (c) => {
+    const id = c.req.param("id"), threadId = c.req.param("thread");
+    const body = await c.req.json<{ path: string; action: "reply" | "accept" | ThreadStatus; text?: string }>();
+    resolvePath(id, body.path);
+    const by = c.get("session").name;
+    const ok = await withDoc(id, body.path, c.get("session"), (doc) => {
+      if (body.action === "reply") return !!reply(doc, threadId, by, body.text ?? "");
+      if (body.action === "accept") return acceptSuggestion(doc, threadId, by);
+      return !!setStatus(doc, threadId, body.action, by);
+    });
+    if (!ok) throw new HttpError(409, "Can't do that to this thread");
+    return c.json({ ok: true });
+  })
+
   // ── Checkpoints (git) ────────────────────────────────────────────────────
   .get("/:id/history", async (c) => c.json(await history(projectDir(c.req.param("id")))))
 
@@ -187,7 +253,7 @@ export const projectRoutes = new Hono<AppEnv>()
     const id = c.req.param("id");
     const { message } = await c.req.json<{ message?: string }>().catch(() => ({ message: undefined }));
     await flushProject(id);
-    const cp = await checkpoint(projectDir(id), (message ?? "").trim().slice(0, 200), c.get("session").name);
+    const cp = await withGitLock(id, () => checkpoint(projectDir(id), (message ?? "").trim().slice(0, 200), c.get("session").name));
     if (cp) await touchProject(id);
     return c.json({ checkpoint: cp });
   });
