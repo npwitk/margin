@@ -26,6 +26,11 @@ const PATHS: Record<string, string> = {
   copy: "M9 9h11v11H9zM5 15H4V4h11v1",
   key: "M15 7a4 4 0 1 1-3.9 5H8v3H5v-3H3v-3h8.1A4 4 0 0 1 15 7zM16 11h.01",
   terminal: "M4 6l6 6-6 6M12 18h8",
+  calendar: "M5 5h14v15H5zM5 10h14M9 3v4M15 3v4",
+  task: "M5 4h14v16H5zM9 12l2 2 4-4",
+  paperclip: "M20 11.5l-8.2 8.2a5 5 0 0 1-7-7L13 4.5a3.3 3.3 0 0 1 4.7 4.7l-8.2 8.2a1.7 1.7 0 0 1-2.4-2.4L14.5 7.6",
+  tag: "M3 12V4h8l10 10-8 8zM7.5 8h.01",
+  external: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
 };
 
 export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {

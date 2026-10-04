@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
+import { GlobalWorkerOptions, TextLayer, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { SyncTexForward } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
@@ -67,8 +67,17 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
       canvas.width = Math.floor(vp.width * dpr);
       canvas.height = Math.floor(vp.height * dpr);
       wrap.appendChild(canvas);
+      // Invisible, selectable text over the canvas, so you can drag-select and copy like normal text.
+      const text = document.createElement("div");
+      text.className = "textLayer";
+      wrap.style.setProperty("--scale-factor", String(s));
+      wrap.style.setProperty("--total-scale-factor", String(s));
+      wrap.appendChild(text);
       fragment.appendChild(wrap);
-      jobs.push(() => page.render({ canvas, viewport: page.getViewport({ scale: s * dpr }) }).promise);
+      jobs.push(async () => {
+        await page.render({ canvas, viewport: page.getViewport({ scale: s * dpr }) }).promise;
+        await new TextLayer({ textContentSource: page.streamTextContent(), container: text, viewport: vp }).render().catch(() => {});
+      });
     }
     // Render off-screen first so recompiles don't flash a blank pane.
     for (const job of jobs) {

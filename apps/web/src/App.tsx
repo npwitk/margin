@@ -8,6 +8,7 @@ import { Workspace } from "./components/Workspace.tsx";
 import { Spinner } from "./components/Icon.tsx";
 import { JoinProject } from "./components/ShareDialog.tsx";
 import { Library } from "./components/Library.tsx";
+import { rememberAvatars } from "./lib/avatars.ts";
 
 export function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -22,6 +23,13 @@ export function App() {
     window.addEventListener("margin:unauthorized", onUnauthorized);
     return () => window.removeEventListener("margin:unauthorized", onUnauthorized);
   }, []);
+
+  // Learn everyone's GitHub picture once signed in.
+  useEffect(() => {
+    if (!session) return;
+    rememberAvatars([[session.name, session.avatar]]);
+    api.workspace().then((w) => rememberAvatars(w.members.map((m) => [m.name, m.avatar]))).catch(() => {});
+  }, [session]);
 
   if (session === undefined) return <div className="center-screen"><Spinner size={20} /></div>;
   if (!session) return <Login methods={methods} onLogin={setSession} />;

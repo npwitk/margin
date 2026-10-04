@@ -137,6 +137,11 @@ export const TASK_COLUMNS: { id: TaskStatus; label: string }[] = [
   { id: "done", label: "Done" },
 ];
 
+export type TaskPriority = "highest" | "high" | "medium" | "low" | "lowest";
+export const TASK_PRIORITIES: { id: TaskPriority; label: string }[] = [
+  { id: "highest", label: "Highest" }, { id: "high", label: "High" }, { id: "medium", label: "Medium" }, { id: "low", label: "Low" }, { id: "lowest", label: "Lowest" },
+];
+
 /** A card on the project board. Stored in the project's `.margin/board.json`. */
 export interface Task {
   id: string;
@@ -148,6 +153,11 @@ export interface Task {
   files?: string[];
   notes?: string;
   due?: string;
+  priority?: TaskPriority;
+  /** Short labels, e.g. ["writing", "experiment"]. */
+  labels?: string[];
+  /** Per-project number shown as PREFIX-12; older tasks get one from creation order. */
+  number?: number;
   /** Sort key within a column. */
   order: number;
   createdBy: string;

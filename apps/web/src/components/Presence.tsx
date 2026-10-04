@@ -1,7 +1,10 @@
 import { colorFor } from "@margin/shared";
 import type { Peer } from "../lib/collab.ts";
+import { useAvatar } from "../lib/avatars.ts";
 
 export function Avatar({ name, size, online, title, src, agent }: { name: string; size?: "sm" | "xs"; online?: boolean; title?: string; src?: string; agent?: boolean }) {
+  const known = useAvatar(name);
+  src = src ?? known;
   return (
     <span className={`avatar ${size ?? ""} ${online ? "online" : ""} ${agent ? "agent" : ""}`} style={agent ? undefined : { background: colorFor(name) }} title={title ?? name}>
       {agent ? "✦" : src ? <img src={src} alt="" /> : name.slice(0, 1).toUpperCase()}

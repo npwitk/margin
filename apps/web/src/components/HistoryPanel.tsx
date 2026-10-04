@@ -1,3 +1,4 @@
+import { Avatar } from "./Presence.tsx";
 import { useEffect, useState } from "react";
 import type { Checkpoint } from "@margin/shared";
 import { api } from "../lib/api.ts";
@@ -48,7 +49,7 @@ export function HistoryPanel({ projectId, onClose, beforeCheckpoint }: {
         {!items && <Spinner />}
         {items?.map((c) => (
           <div key={c.hash} className="history-item">
-            <span className="avatar sm">{c.author.slice(0, 1).toUpperCase()}</span>
+            <Avatar name={c.author} size="sm" />
             <div className="grow">
               <div>{c.message}</div>
               <div className="muted small">{c.author} · {relativeTime(c.date)}</div>

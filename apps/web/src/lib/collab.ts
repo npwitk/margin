@@ -27,7 +27,7 @@ export class ProjectCollab {
     this.room = this.provider(ROOM);
     this.room.awareness?.setLocalState({ user: this.user, file: null, view: "write" } satisfies PresenceState);
     this.room.on("synced", () => {
-      this.room.document.getMap("members").set(session.name, { color, lastSeen: new Date().toISOString() });
+      this.room.document.getMap("members").set(session.name, { color, lastSeen: new Date().toISOString(), ...(session.avatar ? { avatar: session.avatar } : {}) });
     });
   }
 
@@ -98,7 +98,7 @@ export class ProjectCollab {
   }
 
   get tasks() { return this.room.document.getMap<Task>("tasks"); }
-  get members() { return this.room.document.getMap<{ color: string; lastSeen: string }>("members"); }
+  get members() { return this.room.document.getMap<{ color: string; lastSeen: string; avatar?: string }>("members"); }
   get agents() { return this.room.document.getMap<AgentActivity>("agents"); }
   get events() { return this.room.document.getMap<RoomEvents[keyof RoomEvents]>("events"); }
 

@@ -13,6 +13,7 @@ import { CitationsPanel } from "./CitationsPanel.tsx";
 import { ReviewView } from "./ReviewView.tsx";
 import { useYMap } from "../lib/collab.ts";
 import { navigate } from "../lib/router.ts";
+import { rememberAvatars } from "../lib/avatars.ts";
 import { load, save } from "../lib/storage.ts";
 import { CommandPalette, type Command } from "./CommandPalette.tsx";
 import { PromptDialog, type PromptRequest } from "./Dialog.tsx";
@@ -64,6 +65,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   const collab = useCollab(projectId, session);
   const peers = usePeers(collab);
+  useEffect(() => { rememberAvatars(peers.filter((p) => !p.user.agent).map((p) => [p.user.name, p.user.avatar])); }, [peers]);
   const [reviewOpen, setReviewOpen] = useState(() => load("review", false));
   const [activeThread, setActiveThread] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -486,7 +488,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       </header>
 
       {view === "board" && (
-        <Board collab={collab} session={session} files={files} peers={peers} onOpenFile={(p) => openFile(p)} />
+        <Board collab={collab} session={session} files={files} peers={peers} projectName={project.name} onOpenFile={(p) => openFile(p)} />
       )}
       {view === "review" && (
         <ReviewView project={project} settings={aiSettings} onProjectChange={setProject} onOpenSettings={() => setAiSettingsOpen(true)}

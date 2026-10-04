@@ -21,6 +21,7 @@
     "@margin/shared": "*",
     "codemirror": "^6.0.1",
     "dompurify": "^3.4.16",
+    "katex": "^0.16.47",
     "marked": "^18.0.14",
     "pdfjs-dist": "^5.4.0",
     "react": "^19.0.0",

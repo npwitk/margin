@@ -46,10 +46,10 @@ export function PromptDialog({ req, onDone }: { req: PromptRequest; onDone(): vo
   );
 }
 
-export function Modal({ children, onClose, wide }: { children: ReactNode; onClose(): void; wide?: boolean }) {
+export function Modal({ children, onClose, wide, className }: { children: ReactNode; onClose(): void; wide?: boolean; className?: string }) {
   return (
     <div className="overlay" onMouseDown={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
-      <div className={`modal ${wide ? "wide" : ""}`} onMouseDown={(e) => e.stopPropagation()}>{children}</div>
+      <div className={`modal ${wide ? "wide" : ""} ${className ?? ""}`} onMouseDown={(e) => e.stopPropagation()}>{children}</div>
     </div>
   );
 }
