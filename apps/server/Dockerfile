@@ -15,6 +15,9 @@ RUN npm run build -w @margin/web
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app /app
+# Same uid as the compile sandbox's user, so both can read and write the build copies.
+RUN useradd --create-home --uid 10001 margin && mkdir -p /data && chown margin:margin /data
+USER margin
 WORKDIR /app/apps/server
 ENV NODE_ENV=production DATA_DIR=/data PORT=8787
 EXPOSE 8787
