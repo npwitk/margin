@@ -64,7 +64,10 @@ const theme = EditorView.theme({
   ".cm-line": { padding: "0 20px 0 12px" },
   ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--text-faint)", border: "none" },
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--text-muted)" },
-  ".cm-activeLine": { backgroundColor: "var(--hover)" },
+  // Translucent, so the selection (drawn underneath the text) stays visible on the cursor's line.
+  ".cm-activeLine": { backgroundColor: "var(--active-line)" },
+  ".cm-selectionMatch": { backgroundColor: "var(--selection-match)", borderRadius: "2px" },
+  ".cm-selectionLayer .cm-selectionBackground": { borderRadius: "2px" },
   ".cm-cursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": { backgroundColor: "var(--selection) !important" },
   ".cm-foldGutter span": { color: "var(--text-faint)" },
