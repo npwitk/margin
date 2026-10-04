@@ -40,9 +40,10 @@ export class Workspace {
   onEvent: (e: ThreadEvent) => void = () => {};
   refs = 0;
 
-  constructor(private config: Config, readonly projectId: string) {
+  /** Read-only copies (for reviews) always mirror the paper and never send changes back. */
+  constructor(private config: Config, readonly projectId: string, readonly readonly = false) {
     const host = new URL(config.url).host.replace(/[^\w.-]/g, "_");
-    this.root = path.join(config.home, "workspaces", host, projectId);
+    this.root = path.join(config.home, "workspaces", host, readonly ? `${projectId}.readonly` : projectId);
   }
 
   private async api(p: string, init: RequestInit = {}) {
@@ -79,7 +80,7 @@ export class Workspace {
       }
       const local = await readFile(abs, "utf8").catch(() => null);
       const base = this.base.get(f.path);
-      if (local !== null && base !== undefined && local !== base) continue; // agent's unsynced change wins locally
+      if (!this.readonly && local !== null && base !== undefined && local !== base) continue; // agent's unsynced change wins locally
       if (local !== f.text) {
         await mkdir(path.dirname(abs), { recursive: true });
         await writeFile(abs, f.text!);
@@ -109,7 +110,7 @@ export class Workspace {
   }
 
   start() {
-    if (this.watcher) return;
+    if (this.watcher || this.readonly) return;
     this.watcher = watch(this.root, { recursive: true }, (_event, name) => {
       if (!name) return;
       const rel = String(name).split(path.sep).join("/");
@@ -127,6 +128,7 @@ export class Workspace {
 
   /** Send one file's local change to Margin, if it changed since the last sync. */
   push(rel: string): Promise<void> {
+    if (this.readonly) return Promise.resolve();
     const prev = this.inflight.get(rel) ?? Promise.resolve();
     const next = prev.then(async () => {
       const abs = path.join(this.root, rel);
@@ -149,6 +151,7 @@ export class Workspace {
 
   /** Push every pending local change (catches anything the watcher missed). */
   async flush() {
+    if (this.readonly) return;
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
     const seen = new Set<string>();

@@ -27,6 +27,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
       MARGIN_ACCESS: ${MARGIN_ACCESS:-}
+      MARGIN_ADMINS: ${MARGIN_ADMINS:-}
       COMPILE_URL: http://compile:8788
       COMPILE_TOKEN: ${COMPILE_TOKEN:-margin-internal}
     volumes:

@@ -6,6 +6,7 @@ import { useThreads } from "../lib/review.ts";
 import { ReviewPanel, type Draft } from "./ReviewPanel.tsx";
 import { LocalDialog } from "./LocalDialog.tsx";
 import { ShareDialog } from "./ShareDialog.tsx";
+import { MarkdownView } from "./MarkdownView.tsx";
 import { AiSettingsDialog } from "./AiSettingsDialog.tsx";
 import { AssistantPanel } from "./AssistantPanel.tsx";
 import { CitationsPanel } from "./CitationsPanel.tsx";
@@ -48,6 +49,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [localOpen, setLocalOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  // Markdown files open rendered; this remembers which ones you switched to the source.
+  const [mdSource, setMdSource] = useState<Set<string>>(new Set());
   const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   const [highlight, setHighlight] = useState<SyncTexForward & { key: number }>();
   const [toast, setToast] = useState<string | null>(null);
@@ -430,6 +433,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const errors = result?.diagnostics.filter((d) => d.severity === "error").length ?? 0;
   const warnings = result?.diagnostics.filter((d) => d.severity === "warning").length ?? 0;
   const binaryOpen = openPath && !isTextPath(openPath) ? openPath : null;
+  const mdPreview = !binaryOpen && !!textPath && /\.(md|markdown)$/i.test(textPath) && !mdSource.has(textPath);
+  const toggleMd = () => textPath && setMdSource((s) => { const n = new Set(s); n.has(textPath) ? n.delete(textPath) : n.add(textPath); return n; });
 
   return (
     <div className="workspace">
@@ -507,7 +512,13 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               {openPath && dirty.has(openPath) && <span className="dot" title="Sending edits…" />}
               {openPath && peersByFile.get(openPath)?.map((p) => <Avatar key={p.clientId} name={p.user.name} size="xs" title={`${p.user.name} is here${p.line ? ` (line ${p.line})` : ""}`} />)}
               <div className="spacer" />
-              {!binaryOpen && <span className="muted small hint">{MOD}J jump to PDF · double-click PDF to jump back</span>}
+              {textPath && /\.(md|markdown)$/i.test(textPath) && !binaryOpen && (
+                <div className="segmented small-seg">
+                  <button className={mdPreview ? "active" : ""} onClick={() => mdPreview || toggleMd()}>Read</button>
+                  <button className={!mdPreview ? "active" : ""} onClick={() => mdPreview && toggleMd()}>Edit</button>
+                </div>
+              )}
+              {!binaryOpen && !mdPreview && /\.tex$/i.test(textPath ?? "") && <span className="muted small hint">{MOD}J jump to PDF · double-click PDF to jump back</span>}
               {!binaryOpen && (
                 <>
                   <button className="btn ghost tight" onClick={() => startComment()} title={`Comment on selection (${MOD}⌥M)`}><Icon name="comment" size={13} />Comment</button>
@@ -519,8 +530,9 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
             </div>
             <div className="pane-body row-layout">
              <div className="editor-area">
+              {mdPreview && textPath && <MarkdownView collab={collab} projectId={projectId} path={textPath} onOpen={(p) => openFile(p)} />}
               {textPath && (
-                <div className="fill" hidden={!!binaryOpen}>
+                <div className="fill" hidden={!!binaryOpen || mdPreview}>
                   <Editor
                     ref={editor}
                     collab={collab}

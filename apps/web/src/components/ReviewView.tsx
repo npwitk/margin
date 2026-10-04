@@ -3,6 +3,9 @@ import type { AiSettings, Project, ReviewIssue, ReviewSkill } from "@margin/shar
 import { api, type StoredReview } from "../lib/api.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Icon, Spinner } from "./Icon.tsx";
+import { renderMarkdown } from "../lib/markdown.ts";
+import { useConnect } from "../lib/connect.ts";
+import { load, save } from "../lib/storage.ts";
 
 interface Props {
   project: Project;
@@ -22,6 +25,12 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
   const [reviews, setReviews] = useState<StoredReview[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [commented, setCommented] = useState<Set<string>>(new Set());
+  // Who runs the review: Margin with an API key, or your own agent through Margin Connect.
+  const connect = useConnect(project.id);
+  const agents = connect.devices.flatMap((d) => d.agents.filter((a) => a.available).map((a) => ({ value: `${d.id}|${a.id}`, label: `${a.name} · ${d.name}`, deviceId: d.id, agentId: a.id })));
+  const [runnerValue, setRunnerValue] = useState<string>(() => load("reviewRunner", "api"));
+  useEffect(() => save("reviewRunner", runnerValue), [runnerValue]);
+  const runner = agents.find((a) => a.value === runnerValue);
 
   const refresh = async () => {
     const list = await api.reviews(project.id);
@@ -56,7 +65,7 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
   const run = async () => {
     try {
       await saveGoal();
-      const r = await api.startReview(project.id, skill, goal);
+      const r = await api.startReview(project.id, skill, goal, runner ? { deviceId: runner.deviceId, agentId: runner.agentId } : undefined);
       setSelected(r.id);
       await refresh();
     } catch (err) {
@@ -87,17 +96,34 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
           <input className="input" placeholder="e.g. NeurIPS 2027 main track, Q1 journal, MSc thesis" value={goal} onChange={(e) => setGoal(e.target.value)} onBlur={() => void saveGoal()} />
           <label className="field-label">Review rubric</label>
           <select value={skill} onChange={(e) => setSkill(e.target.value)}>
-            {skills.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            <optgroup label="Review panels (several reviewers)">
+              {skills.filter((s) => s.kind === "panel").map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </optgroup>
+            <optgroup label="Single reviewer with a venue rubric">
+              {skills.filter((s) => s.kind !== "panel").map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </optgroup>
           </select>
           <p className="muted small">{skills.find((s) => s.id === skill)?.description}</p>
-          {noKey ? (
+          {skills.find((s) => s.id === skill)?.credit && <p className="muted tiny">{skills.find((s) => s.id === skill)!.credit}</p>}
+          <label className="field-label">Run with</label>
+          <select value={runner ? runner.value : "api"} onChange={(e) => setRunnerValue(e.target.value)}>
+            <option value="api">Margin · your Anthropic API key</option>
+            {agents.map((a) => <option key={a.value} value={a.value}>{a.label} · your subscription</option>)}
+          </select>
+          {!agents.length && <p className="muted tiny">Connect Claude Code or Codex (Assistant → “Use Claude Code or Codex…”) to review with your own subscription. Claude Code runs the reviewers as parallel subagents.</p>}
+          {noKey && !runner ? (
             <button className="btn primary block" onClick={onOpenSettings}>Add API key to review</button>
           ) : (
             <button className="btn primary block" onClick={run} disabled={reviews.some((r) => r.status === "running")}>
               {reviews.some((r) => r.status === "running") ? <><Spinner /> Reviewing…</> : <>✦ Review the paper</>}
             </button>
           )}
-          <p className="muted small">Claude reads the whole paper and bibliography. A review takes about a minute.</p>
+          <p className="muted small">{(() => {
+            const sk = skills.find((x) => x.id === skill);
+            return sk?.kind === "panel"
+              ? `${sk.reviewers} reviewers read the whole paper and bibliography in parallel; the paper is cached, so the extra reviewers cost far less than ${sk.reviewers} full reads. The report is also saved to reviews/.`
+              : "Claude reads the whole paper and bibliography. A review takes about a minute.";
+          })()}</p>
         </div>
         {reviews.length > 0 && (
           <div className="review-history">
@@ -117,7 +143,23 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
 
       <main className="review-main">
         {!current && <div className="empty">Set your goal and run a review to see how ready the paper is, with scores per criterion and concrete fixes.</div>}
-        {current?.status === "running" && <div className="empty"><Spinner size={18} /><p>Claude is reading the paper…</p></div>}
+        {current?.status === "running" && current.runner && (
+          <AgentRunView review={current} connect={connect} onStop={() => void api.cancelReview(project.id, current.id)} />
+        )}
+        {current?.status === "running" && !current.runner && (
+          <div className="empty">
+            <Spinner size={18} />
+            {current.progress ? (
+              <>
+                <p>{current.progress.done.length} of {current.progress.total} reviewers done</p>
+                <div className="panel-progress">
+                  {current.progress.done.map((d) => <span key={d} className="chip"><Icon name="check" size={11} />{d}</span>)}
+                  {current.progress.running.map((d) => <span key={d} className="chip active"><Spinner size={9} />{d}</span>)}
+                </div>
+              </>
+            ) : <p>Claude is reading the paper…</p>}
+          </div>
+        )}
         {current?.status === "error" && <div className="empty error">{current.error}</div>}
         {result && (
           <>
@@ -129,6 +171,35 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
                 <p>{result.summary}</p>
               </div>
             </header>
+            {result.panel && (
+              <div className="panel-chips">
+                {result.panel.recommendation && <span className={`rec-chip ${result.panel.recommendation.replace(/ /g, "-")}`}>{result.panel.recommendation}</span>}
+                <span className="sev-chip critical">{result.panel.counts.critical} critical</span>
+                <span className="sev-chip major">{result.panel.counts.major} major</span>
+                <span className="sev-chip minor">{result.panel.counts.minor} minor</span>
+                <div className="spacer" />
+                {result.panel.report && <button className="btn" onClick={() => onOpen(result.panel!.report!)}><Icon name="file" size={13} />Open full report</button>}
+              </div>
+            )}
+            {result.panel?.failed.length ? <p className="error small">These reviewers didn't return a result: {result.panel.failed.join(", ")}. Their sections are placeholders.</p> : null}
+            {result.panel?.contribution && (
+              <section className="card contribution">
+                <div className="section-label">Central contribution</div>
+                <div className="two-col">
+                  {(["advocate", "skeptic"] as const).map((side) => {
+                    const c = result.panel!.contribution![side];
+                    return c ? (
+                      <div key={side} className={`side ${side}`}>
+                        <div className="side-head"><strong>{side === "advocate" ? "Advocate" : "Skeptic"}</strong><span className={`rating ${c.rating}`}>{c.rating}</span></div>
+                        <p className="small">{c.justification}</p>
+                      </div>
+                    ) : null;
+                  })}
+                </div>
+                {result.panel.contribution.crux && <p className="small"><strong>Crux:</strong> {result.panel.contribution.crux}</p>}
+                {result.panel.contribution.synthesis && <p className="small muted">{result.panel.contribution.synthesis}</p>}
+              </section>
+            )}
             <div className="two-col">
               <section className="card">
                 <div className="section-label">Top priorities</div>
@@ -146,13 +217,14 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
                   <div className="bar"><div className={`fill-bar s${Math.round(c.score / 2)}`} style={{ width: `${c.score * 10}%` }} /></div>
                   <span className="criterion-score">{c.score}</span>
                 </div>
-                <p className="small">{c.assessment}</p>
+                <div className="small md criterion-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(c.assessment) }} />
                 {c.issues.map((issue, ii) => {
                   const key = `${current!.id}-${ci}-${ii}`;
                   return (
                     <div key={ii} className="issue">
                       <span className={`sev-dot ${issue.severity}`} title={`${issue.severity} priority`} />
                       <div className="grow">
+                        {issue.tag && <span className={`sev-chip ${issue.tag.toLowerCase()}`}>{issue.tag}</span>}{issue.location && <span className="muted small"> {issue.location}</span>}
                         {issue.quote && <blockquote className="quote">{issue.quote}</blockquote>}
                         <div className="small"><strong>{issue.problem}</strong></div>
                         <div className="small muted">{issue.suggestion}</div>
@@ -170,9 +242,45 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
                 })}
               </section>
             ))}
+            {result.panel && result.panel.questions.length > 0 && (
+              <section className="card">
+                <div className="section-label">Questions a referee would ask</div>
+                <ol>{result.panel.questions.map((q, i) => <li key={i}>{q}</li>)}</ol>
+              </section>
+            )}
+            {result.panel?.credit && <p className="muted tiny">{result.panel.credit}</p>}
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+
+/** A review running on your own agent: what it's doing, and any permission it needs. */
+function AgentRunView({ review, connect, onStop }: { review: StoredReview; connect: ReturnType<typeof useConnect>; onStop(): void }) {
+  const r = review.runner!;
+  useEffect(() => { connect.openThread(r.threadId); }, [r.threadId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const thread = connect.open[r.threadId];
+  const pending = thread?.entries.filter((e) => e.type === "permission" && !e.done) as Extract<NonNullable<typeof thread>["entries"][number], { type: "permission" }>[] | undefined;
+  return (
+    <div className="empty agent-run">
+      <Spinner size={18} />
+      <p><strong>{r.agent}</strong> on {r.device} is reviewing the paper{r.agent.startsWith("Claude") ? " with parallel subagents" : ""}.</p>
+      <p className="muted small">This uses your {r.agent} subscription, not an API key. A full panel can take several minutes.</p>
+      {pending?.map((p) => (
+        <div key={p.requestId} className="permission">
+          <div><strong>{r.agent}</strong> wants to: {p.title}</div>
+          <div className="row gap">
+            {p.options.map((o) => (
+              <button key={o.optionId} className={`btn tight ${o.kind.startsWith("allow") ? "primary" : ""}`}
+                onClick={() => void connect.command(r.deviceId, { kind: "permission", threadId: r.threadId, requestId: p.requestId, optionId: o.optionId })}>{o.name}</button>
+            ))}
+          </div>
+        </div>
+      ))}
+      {review.activity?.length ? <div className="activity">{review.activity.map((a, i) => <div key={i} className="tool-row completed"><Icon name="check" size={11} /><span className="ellipsis">{a}</span></div>)}</div> : null}
+      <button className="btn ghost" onClick={onStop}>Stop</button>
     </div>
   );
 }

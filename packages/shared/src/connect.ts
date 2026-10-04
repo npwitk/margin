@@ -67,6 +67,9 @@ export interface AgentThread {
   createdAt: string;
   updatedAt: string;
   mode: ApplyMode;
+  /** "review": a read-only run whose final answer becomes a Margin review. */
+  purpose?: "chat" | "review";
+  reviewId?: string;
   modes?: SessionMode[];
   currentMode?: string;
   running: boolean;
@@ -144,7 +147,7 @@ export function threadTranscript(t: AgentThread, maxChars = 24_000): string {
 // Relay messages (bridge ⇄ server ⇄ browser).
 
 export type ConnectCommand =
-  | { kind: "start"; threadId: string; projectId: string; agentId: AgentId; mode: ApplyMode; handoff?: string }
+  | { kind: "start"; threadId: string; projectId: string; agentId: AgentId; mode: ApplyMode; handoff?: string; readonly?: boolean }
   | { kind: "prompt"; threadId: string; text: string; by: string }
   | { kind: "cancel"; threadId: string }
   | { kind: "permission"; threadId: string; requestId: string; optionId: string | null }

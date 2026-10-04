@@ -1,5 +1,5 @@
 import type {
-  AiSettings, AuthMethods, ProjectAccess, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
+  AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
 export type StoredReview = Omit<PaperReview, "result"> & { status: "running" | "done" | "error"; error?: string; result?: PaperReview["result"] };
@@ -107,7 +107,9 @@ export const api = {
   skills: (id: string) => req<ReviewSkill[]>(`${P(id)}/ai/skills`),
   reviews: (id: string) => req<StoredReview[]>(`${P(id)}/ai/reviews`),
   review: (id: string, reviewId: string) => req<StoredReview>(`${P(id)}/ai/reviews/${reviewId}`),
-  startReview: (id: string, skill: string, goal?: string) => req<StoredReview>(`${P(id)}/ai/reviews`, json("POST", { skill, goal })),
+  startReview: (id: string, skill: string, goal?: string, runner?: { deviceId: string; agentId: string }) =>
+    req<StoredReview>(`${P(id)}/ai/reviews`, json("POST", { skill, goal, runner })),
+  cancelReview: (id: string, reviewId: string) => req(`${P(id)}/ai/reviews/${reviewId}/cancel`, json("POST")),
   addThread: (id: string, body: { path: string; quote: string; kind: "comment" | "suggestion"; message?: string; replacement?: string }) =>
     req<{ id: string }>(`${P(id)}/review`, json("POST", body)),
   citations: (id: string) => req<CitationReport>(`${P(id)}/citations`),
@@ -119,6 +121,12 @@ export const api = {
   join: (id: string, token: string) => req<Project>(`${P(id)}/join`, json("POST", { token })),
   removeMember: (id: string, memberId: string) => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }),
   setRole: (id: string, memberId: string, role: "owner" | "editor") => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, json("PATCH", { role })),
+
+  workspace: () => req<WorkspaceInfo>("/workspace"),
+  createWorkspaceInvite: (days: number, maxUses: number) => req<{ id: string; token: string; expiresAt: string; maxUses: number }>("/workspace/invites", json("POST", { days, maxUses })),
+  revokeWorkspaceInvite: (id: string) => req(`/workspace/invites/${id}`, { method: "DELETE" }),
+  removeWorkspaceMember: (login: string) => req(`/workspace/members/${encodeURIComponent(login)}`, { method: "DELETE" }),
+  setWorkspaceRole: (login: string, role: "admin" | "member") => req(`/workspace/members/${encodeURIComponent(login)}`, json("PATCH", { role })),
 
   history: (id: string) => req<Checkpoint[]>(`${P(id)}/history`),
   checkpoint: (id: string, message: string) => req<{ checkpoint: Checkpoint | null }>(`${P(id)}/checkpoint`, json("POST", { message })),

@@ -188,14 +188,25 @@ export async function deleteEntry(id: string, rel: string) {
   await rm(resolvePath(id, rel), { recursive: true, force: true });
 }
 
-/** Mirror the project into the compile sandbox's work dir, keeping previous build output for speed. */
+/**
+ * Mirror the project into the compile sandbox's work dir. Build output
+ * (`_out` folders, next to the main file) is kept between compiles for speed;
+ * files no longer in the project are removed.
+ */
 export async function syncWorkDir(id: string) {
   const dest = workDir(id);
   await mkdir(dest, { recursive: true });
-  for (const name of await readdir(dest)) {
-    if (name !== "_out") await rm(path.join(dest, name), { recursive: true, force: true });
-  }
   const src = projectDir(id);
+  const prune = async (rel: string) => {
+    for (const e of await readdir(path.join(dest, rel), { withFileTypes: true }).catch(() => [])) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.name === "_out") continue;
+      const inProject = await lstat(path.join(src, r)).then((st) => (e.isDirectory() ? st.isDirectory() : st.isFile()), () => false);
+      if (!inProject || NEVER_COMPILE.has(e.name)) await rm(path.join(dest, r), { recursive: true, force: true });
+      else if (e.isDirectory()) await prune(r);
+    }
+  };
+  await prune("");
   await cp(src, dest, {
     recursive: true,
     // Skip symlinks too: they could point TeX at files outside the project.

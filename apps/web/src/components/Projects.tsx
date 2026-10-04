@@ -5,6 +5,7 @@ import { navigate } from "../lib/router.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Modal } from "./Dialog.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
+import { WorkspaceDialog } from "./WorkspaceDialog.tsx";
 
 const TEMPLATES = [
   { id: "article", label: "Article", hint: "Sections, natbib, a references folder" },
@@ -16,6 +17,9 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [admin, setAdmin] = useState(false);
+  useEffect(() => { api.workspace().then((w) => setAdmin(w.admin)).catch(() => {}); }, []);
 
   useEffect(() => { api.projects().then(setProjects).catch((e) => setError(e.message)); }, []);
 
@@ -36,6 +40,7 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
         <div className="logo">M</div>
         <span className="project-name static">Margin</span>
         <div className="spacer" />
+        <button className="btn ghost" onClick={() => setMembersOpen(true)}><Icon name="plus" size={13} />{admin ? "Members & invites" : "Members"}</button>
         <span className="muted small">{session.name}</span>
         <button className="icon-btn" title="Sign out" onClick={async () => { await api.logout(); onLogout(); }}><Icon name="logout" /></button>
       </header>
@@ -67,6 +72,7 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
         </div>
       </main>
       {creating && <NewProject onClose={() => setCreating(false)} />}
+      {membersOpen && <WorkspaceDialog session={session} onClose={() => setMembersOpen(false)} />}
     </div>
   );
 }

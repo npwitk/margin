@@ -21,7 +21,7 @@ interface Props {
 /** Chat with a local agent (Claude Code, Codex…) running through margin-connect. */
 export function ConnectPanel({ connect, device, agentId, onOpenFile, onPickAgent, initialThreadId }: Props) {
   const agent = device.agents.find((a) => a.id === agentId);
-  const mine = connect.threads.filter((t) => t.deviceId === device.id && t.agentId === agentId);
+  const mine = connect.threads.filter((t) => t.deviceId === device.id && t.agentId === agentId && t.purpose !== "review");
   const [threadId, setThreadId] = useState<string | null>(null);
   const [mode, setMode] = useState<ApplyMode>("suggest");
   const [input, setInput] = useState("");

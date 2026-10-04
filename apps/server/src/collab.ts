@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, Server } from "node:http";
 import path from "node:path";
@@ -12,6 +13,7 @@ import { HttpError, projectDir, resolvePath } from "./storage.ts";
 import { canAccess } from "./access.ts";
 import { handleBridge, handleUi } from "./connect/relay.ts";
 import { verifyToken } from "./tokens.ts";
+import { isActiveMember } from "./workspace.ts";
 
 /**
  * Live collaboration. Every text file is a Yjs document (`<projectId>/<path>`)
@@ -44,6 +46,15 @@ async function writeAtomic(file: string, data: string | Uint8Array) {
   const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.margin-tmp`;
   await writeFile(tmp, data);
   await rename(tmp, file);
+}
+
+/** A Yjs update inserting `text`, with an ID derived from the document and its content. */
+export function seedUpdate(name: string, text: string): Uint8Array {
+  const seed = new Y.Doc();
+  const h = createHash("sha256").update(`${name}\0${text}`).digest();
+  seed.clientID = (h.readUInt32BE(0) % 0x7ffffffe) + 1;
+  seed.getText("content").insert(0, text);
+  return Y.encodeStateAsUpdate(seed);
 }
 
 /** Replace a Y.Text's content with `next`, touching only the changed region. */
@@ -114,7 +125,7 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
     const t = target(documentName);
     if (!(await exists(path.join(projectDir(t.projectId), ".margin", "project.json")))) throw new Error("no such project");
     if (!t.room && !(await exists(t.file))) throw new Error("no such file");
-    if (!(await canAccess(t.projectId, session))) throw new Error("no such project");
+    if (!(await isActiveMember(session)) || !(await canAccess(t.projectId, session))) throw new Error("no such project");
     return { session };
   },
 
@@ -130,9 +141,20 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
         document.transact(() => board?.tasks?.forEach((task) => tasks.set(task.id, task)));
       }
     } else {
-      // Bring in anything that changed on disk while nobody had this file open.
-      applyText(document.getText("content"), await readFile(t.file, "utf8"));
+      const disk = await readFile(t.file, "utf8");
+      if (state) {
+        // Bring in anything that changed on disk while nobody had this file open.
+        applyText(document.getText("content"), disk);
+      } else {
+        // First time this file is opened: seed it deterministically, so that if
+        // the state is ever lost and the file is seeded again from the same
+        // text, clients that still hold the old copy merge into one copy
+        // instead of duplicating the text.
+        Y.applyUpdate(document, seedUpdate(documentName, disk));
+      }
     }
+    // Save the state right away: a restart before the first edit must not lose it.
+    if (!state) await writeAtomic(ystatePath(documentName), Y.encodeStateAsUpdate(document)).catch((err) => console.error(`ystate ${documentName}:`, err));
     return document;
   },
 
@@ -262,14 +284,14 @@ export function attachCollab(server: Server) {
       // Bridges authenticate with an access token.
       const token = String(req.headers.authorization ?? "").match(/^Bearer\s+(mgn_\S+)$/)?.[1];
       const owner = token ? await verifyToken(token) : null;
-      if (!owner) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); return socket.destroy(); }
+      if (!owner || !(await isActiveMember(owner))) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); return socket.destroy(); }
       return wss.handleUpgrade(req, socket, head, (ws) => handleBridge(ws, { name: owner.name, github: owner.github, agent: "Margin Connect" }));
     }
     if (req.url?.startsWith("/api/connect/ui")) {
       const origin = req.headers.origin;
       if (origin && new URL(origin).host !== req.headers.host && !process.env.MARGIN_ALLOW_ORIGIN?.split(",").includes(origin)) return socket.destroy();
       const session = await sessionFromHeaders(toRequest(req).headers);
-      if (!session) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); return socket.destroy(); }
+      if (!session || !(await isActiveMember(session))) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); return socket.destroy(); }
       return wss.handleUpgrade(req, socket, head, (ws) => handleUi(ws, session));
     }
     if (!req.url?.startsWith("/api/collab")) return socket.destroy();

@@ -74,8 +74,29 @@ function broadcastDevices(member: string) {
   for (const u of uis) if (u.member === member) send(u.ws, { type: "devices", devices });
 }
 
+/** Reviews run on a member's agent report back through this hook (set by the reviewer). */
+export interface ReviewHook {
+  activity(t: AgentThread, text: string): void;
+  done(t: AgentThread, answer: string): void;
+  failed(t: AgentThread, message: string): void;
+}
+let reviewHook: ReviewHook | null = null;
+export const setReviewHook = (h: ReviewHook) => { reviewHook = h; };
+
+/** The agent's text since the last user message (its final answer). */
+const lastAnswer = (t: AgentThread) => {
+  const i = t.entries.findLastIndex((e) => e.type === "user");
+  return t.entries.slice(i + 1).filter((e) => e.type === "text").map((e) => (e as { text: string }).text).join("");
+};
+
 function record(t: AgentThread, event: ThreadEvent) {
   const next = applyThreadEvent(t, event);
+  if (next.purpose === "review" && reviewHook) {
+    if (event.kind === "tool" && event.title) reviewHook.activity(next, event.title);
+    else if (event.kind === "permission") reviewHook.activity(next, `Waiting for your permission: ${event.title}`);
+    else if (event.kind === "turn_end") reviewHook.done(next, lastAnswer(next));
+    else if (event.kind === "error") reviewHook.failed(next, event.message);
+  }
   next.updatedAt = new Date().toISOString();
   threads.set(t.id, next);
   saveSoon(next);
@@ -229,6 +250,53 @@ export function handleUi(ws: WebSocket, session: Session) {
   });
 
   ws.on("close", () => uis.delete(ui));
+}
+
+/** Connected computers of a member, with their agents. */
+export const devicesFor = (session: Session) => devicesOf(memberId(session));
+
+/**
+ * Start a read-only thread on one of the member's computers and send it a
+ * prompt (used to run reviews on Claude Code / Codex with their own subscription).
+ */
+export async function startAgentThread(session: Session, projectId: string, deviceId: string, agentId: string, label: string, prompt: string, reviewId: string): Promise<AgentThread> {
+  const member = memberId(session);
+  const bridge = bridges.get(deviceKey(member, deviceId));
+  if (!bridge) throw new Error("That computer isn't connected. Run margin-connect on it.");
+  const agent = bridge.device.agents.find((a) => a.id === agentId && a.available);
+  if (!agent) throw new Error(`${agentId} isn't available on ${bridge.device.name}`);
+  const now = new Date().toISOString();
+  const t: AgentThread = {
+    id: crypto.randomUUID(), projectId, agentId: agent.id, agentName: agent.name, deviceId: bridge.device.id, deviceName: bridge.device.name,
+    title: label, createdBy: member, createdAt: now, updatedAt: now, mode: "suggest", purpose: "review", reviewId, running: false, entries: [],
+  };
+  threads.set(t.id, t);
+  saveSoon(t);
+  const started = await command(bridge, { kind: "start", threadId: t.id, projectId, agentId: agent.id, mode: "suggest", readonly: true });
+  if (!started.ok) throw new Error(started.error ?? `Couldn't start ${agent.name}`);
+  bridge.threads.add(t.id);
+  record(t, { kind: "user", by: session.name, text: label });
+  const sent = await command(bridge, { kind: "prompt", threadId: t.id, text: prompt, by: session.name }, 15_000);
+  if (!sent.ok) throw new Error(sent.error ?? `${agent.name} didn't accept the review`);
+  return threads.get(t.id)!;
+}
+
+/** Answer a permission request on a member's thread (from the Review view). */
+export async function answerPermission(session: Session, threadId: string, requestId: string, optionId: string | null) {
+  const t = threads.get(threadId);
+  if (!t || t.createdBy !== memberId(session)) throw new Error("Thread not found");
+  const bridge = bridges.get(deviceKey(t.createdBy, t.deviceId));
+  if (!bridge) throw new Error(`${t.deviceName} isn't connected`);
+  const r = await command(bridge, { kind: "permission", threadId, requestId, optionId }, 15_000);
+  if (!r.ok) throw new Error(r.error ?? "Couldn't answer");
+  record(t, { kind: "permission_done", requestId, optionId: optionId ?? undefined });
+}
+
+export async function cancelThread(session: Session, threadId: string) {
+  const t = threads.get(threadId);
+  if (!t || t.createdBy !== memberId(session)) return;
+  const bridge = bridges.get(deviceKey(t.createdBy, t.deviceId));
+  if (bridge) await command(bridge, { kind: "cancel", threadId }, 15_000);
 }
 
 export async function getThread(projectId: string, session: Session, id: string) {

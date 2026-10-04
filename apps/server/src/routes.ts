@@ -16,6 +16,7 @@ import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
 import { addOwner, canAccess, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
 import { limit } from "./ratelimit.ts";
+import { createInvite as createWorkspaceInvite, removeMember as removeWorkspaceMember, revokeInvite as revokeWorkspaceInvite, setRole as setWorkspaceRole, workspaceInfo } from "./workspace.ts";
 import {
   HttpError, createEntry, createProjectFromFiles, etagOf, createProject, deleteEntry, getProject, listFiles, listProjects, moveEntry,
   projectDir, readText, resolvePath, syncWorkDir, touchProject, updateProject, workDir, writeBinary, writeText,
@@ -32,8 +33,9 @@ async function currentText(id: string, rel: string) {
   return live === null ? readText(id, rel) : { content: live, etag: etagOf(live) };
 }
 
+/** Build output sits next to the main file (LaTeX runs in its folder). */
 function pdfFile(id: string, mainFile: string) {
-  return path.join(workDir(id), "_out", `${path.basename(mainFile, ".tex")}.pdf`);
+  return path.join(workDir(id), path.dirname(mainFile), "_out", `${path.basename(mainFile, ".tex")}.pdf`);
 }
 
 export const tokenRoutes = new Hono<AppEnv>()
@@ -45,6 +47,22 @@ export const tokenRoutes = new Hono<AppEnv>()
   .delete("/:tid", async (c) => {
     const ok = await revokeToken(c.get("session").name, c.req.param("tid"));
     return ok ? c.json({ ok: true }) : c.json({ error: "Token not found" }, 404);
+  });
+
+export const workspaceRoutes = new Hono<AppEnv>()
+  .onError((err, c) => c.json({ error: err.message }, ((err as { status?: number }).status ?? 500) as 400))
+  .get("/", async (c) => c.json(await workspaceInfo(c.get("session"))))
+  .post("/invites", async (c) => {
+    const body = await c.req.json<{ days?: number; maxUses?: number }>().catch(() => ({}));
+    return c.json(await createWorkspaceInvite(c.get("session"), body), 201);
+  })
+  .delete("/invites/:id", async (c) => { await revokeWorkspaceInvite(c.get("session"), c.req.param("id")); return c.json({ ok: true }); })
+  .delete("/members/:login", async (c) => { await removeWorkspaceMember(c.get("session"), c.req.param("login")); return c.json({ ok: true }); })
+  .patch("/members/:login", async (c) => {
+    const { role } = await c.req.json<{ role?: "admin" | "member" }>();
+    if (role !== "admin" && role !== "member") return c.json({ error: "Role must be admin or member" }, 400);
+    await setWorkspaceRole(c.get("session"), c.req.param("login"), role);
+    return c.json({ ok: true });
   });
 
 export const projectRoutes = new Hono<AppEnv>()

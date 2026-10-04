@@ -12,6 +12,7 @@ import { head, mergePushed } from "./pushMerge.ts";
 import { projectDir } from "./storage.ts";
 import { verifyToken } from "./tokens.ts";
 import { canAccess } from "./access.ts";
+import { isActiveMember } from "./workspace.ts";
 
 /**
  * Git smart HTTP (`git clone https://host/git/<id>.git`), served by
@@ -66,6 +67,7 @@ export async function handleGit(c: Context) {
 
   const owner = await memberFrom(c);
   if (!owner) return unauthorized(c, c.req.header("authorization") ? "Invalid token" : undefined);
+  if (!(await isActiveMember(owner))) return unauthorized(c, "This token's owner is no longer a member");
   if (!(await canAccess(id, owner))) return c.text("Repository not found\n", 404);
   const member = owner.name;
 

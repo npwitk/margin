@@ -9,15 +9,28 @@ import { logger } from "hono/logger";
 import type { Server } from "node:http";
 import { authRoutes, requireSession, type AppEnv } from "./auth.ts";
 import { attachCollab, shutdownCollab } from "./collab.ts";
-import { ACCESS_MODE, DATA_DIR, GITHUB, OPEN_ACCESS, PASSWORD, PROJECTS_DIR, WEB_DIST } from "./config.ts";
+import { ACCESS_MODE, DATA_DIR, GITHUB, INVITE_ONLY, OPEN_ACCESS, PASSWORD, PROJECTS_DIR, PUBLIC_URL, WEB_DIST } from "./config.ts";
 import { aiProjectRoutes, aiSettingsRoutes } from "./ai/routes.ts";
 import { handleGit } from "./gitHttp.ts";
-import { projectRoutes, tokenRoutes } from "./routes.ts";
+import { projectRoutes, tokenRoutes, workspaceRoutes } from "./routes.ts";
 
 const app = new Hono<AppEnv>();
 app.use("*", logger());
 
 app.get("/api/health", (c) => c.json({ ok: true }));
+
+// Writes from browsers must come from this site (defence in depth on top of SameSite cookies).
+app.use("/api/*", async (c, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(c.req.method) || c.req.header("authorization")?.startsWith("Bearer ")) return next();
+  const source = c.req.header("origin") ?? c.req.header("referer");
+  if (source) {
+    const host = c.req.header("x-forwarded-host") ?? c.req.header("host");
+    let ok = false;
+    try { ok = new URL(source).host === host || (!!PUBLIC_URL && new URL(source).origin === new URL(PUBLIC_URL).origin); } catch { ok = false; }
+    if (!ok) return c.json({ error: "Cross-site request refused" }, 403);
+  }
+  return next();
+});
 app.route("/api", authRoutes);
 app.use("/api/projects/*", requireSession);
 app.use("/api/projects", requireSession);
@@ -35,6 +48,9 @@ app.route("/api/projects", aiProjectRoutes);
 app.route("/api/projects", projectRoutes);
 app.use("/api/ai/*", requireSession);
 app.route("/api/ai", aiSettingsRoutes);
+app.use("/api/workspace/*", requireSession);
+app.use("/api/workspace", requireSession);
+app.route("/api/workspace", workspaceRoutes);
 app.use("/api/tokens/*", requireSession);
 app.use("/api/tokens", requireSession);
 app.route("/api/tokens", tokenRoutes);
@@ -53,7 +69,7 @@ app.get("*", async (c) => {
 
 const port = Number(process.env.PORT ?? 8787);
 const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? "0.0.0.0" }, () => {
-  console.log(`margin server on :${port} (data: ${DATA_DIR}, auth: ${OPEN_ACCESS ? "OPEN — dev only" : [PASSWORD && "password", GITHUB && "github"].filter(Boolean).join(" + ")}, access: ${ACCESS_MODE})`);
+  console.log(`margin server on :${port} (data: ${DATA_DIR}, auth: ${OPEN_ACCESS ? "OPEN — dev only" : [PASSWORD && "password", GITHUB && "github"].filter(Boolean).join(" + ")}, access: ${ACCESS_MODE}${INVITE_ONLY ? ", invite-only" : ""})`);
 });
 attachCollab(server as Server);
 

@@ -86,7 +86,28 @@ export interface ProjectAccess {
   you?: Member;
 }
 
+export interface WorkspaceMember {
+  /** GitHub login, lowercase. */
+  login: string;
+  name: string;
+  avatar?: string;
+  role: "admin" | "member";
+  joinedAt: string;
+  invitedBy?: string;
+}
+
+export interface WorkspaceInfo {
+  inviteOnly: boolean;
+  admin: boolean;
+  members: WorkspaceMember[];
+  invites: { id: string; createdBy: string; createdAt: string; expiresAt: string; maxUses: number; uses: number }[];
+  /** Admins fixed in the server config (MARGIN_ADMINS). */
+  configAdmins: string[];
+}
+
 export interface AuthMethods {
+  /** The workspace only admits invited GitHub accounts. */
+  inviteOnly?: boolean;
   password: boolean;
   github: boolean;
   /** No login configured at all (local development only). */

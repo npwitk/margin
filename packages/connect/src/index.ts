@@ -20,15 +20,17 @@ const config = (() => {
 const agents = detectAgents();
 const runs = new Map<string, AgentRun>();
 const workspaces = new Map<string, Workspace>();
+const readonlyWorkspaces = new Map<string, Workspace>();
 let socket: WebSocket | null = null;
 let backoff = 1000;
 
 const log = (...a: unknown[]) => console.error(new Date().toLocaleTimeString(), ...a);
 const send = (msg: BridgeMessage) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg)); };
 
-function workspaceFor(projectId: string) {
-  let ws = workspaces.get(projectId);
-  if (!ws) { ws = new Workspace(config, projectId); workspaces.set(projectId, ws); }
+function workspaceFor(projectId: string, readonly = false) {
+  const map = readonly ? readonlyWorkspaces : workspaces;
+  let ws = map.get(projectId);
+  if (!ws) { ws = new Workspace(config, projectId, readonly); map.set(projectId, ws); }
   return ws;
 }
 
@@ -37,7 +39,7 @@ async function handle(cmd: ConnectCommand) {
     const spec = agents.find((a) => a.id === cmd.agentId && a.available);
     if (!spec) throw new Error(`${cmd.agentId} isn't installed here`);
     runs.get(cmd.threadId)?.close();
-    const ws = workspaceFor(cmd.projectId);
+    const ws = workspaceFor(cmd.projectId, !!cmd.readonly);
     const emit = (event: ThreadEvent) => send({ type: "event", threadId: cmd.threadId, event });
     ws.onEvent = emit;
     ws.mode = cmd.mode;

@@ -2,7 +2,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   parseLatexLog, toProjectPath,
-  type CompileResult, type Engine, type SyncTexForward, type SyncTexInverse,
+  type CompileResult, type Diagnostic, type Engine, type SyncTexForward, type SyncTexInverse,
 } from "@margin/shared";
 import { run } from "./run.ts";
 
@@ -28,25 +28,38 @@ function texEnv(): NodeJS.ProcessEnv {
   };
 }
 
-const stem = (mainFile: string) => mainFile.replace(/\.tex$/, "");
+const stem = (mainFile: string) => path.basename(mainFile).replace(/\.tex$/, "");
+/** LaTeX runs in the main file's folder (as Overleaf and local TeX do), so \input paths resolve like everywhere else. */
+const mainDir = (mainFile: string) => path.posix.dirname(mainFile) === "." ? "" : path.posix.dirname(mainFile);
 
 export function pdfPath(workDir: string, mainFile: string) {
-  return path.join(workDir, OUT_DIR, `${path.basename(stem(mainFile))}.pdf`);
+  return path.join(workDir, mainDir(mainFile), OUT_DIR, `${stem(mainFile)}.pdf`);
+}
+
+/** A path from TeX (relative to the main file's folder, or absolute) as a project path. */
+function projectPath(raw: string, dir: string, mainFile: string): string | undefined {
+  const cwd = path.join(dir, mainDir(mainFile));
+  if (raw.startsWith("/")) return toProjectPath(raw, dir);
+  const rel = toProjectPath(raw, cwd);
+  if (!rel) return undefined;
+  const joined = path.posix.normalize(path.posix.join(mainDir(mainFile), rel));
+  return joined.startsWith("..") ? undefined : joined;
 }
 
 export async function compile(workDir: string, mainFile: string, engine: Engine): Promise<CompileResult> {
   const started = Date.now();
   const dir = await realpath(workDir);
+  const cwd = path.join(dir, mainDir(mainFile));
   const args = [
     ENGINE_FLAG[engine], "-norc", "-synctex=1", "-interaction=nonstopmode", "-file-line-error",
-    "-no-shell-escape", `-outdir=${OUT_DIR}`, mainFile,
+    "-no-shell-escape", `-outdir=${OUT_DIR}`, path.basename(mainFile),
   ];
-  const res = await run("latexmk", args, { cwd: dir, env: texEnv(), timeoutMs: TIMEOUT_MS });
+  const res = await run("latexmk", args, { cwd, env: texEnv(), timeoutMs: TIMEOUT_MS });
 
-  const logFile = path.join(dir, OUT_DIR, `${path.basename(stem(mainFile))}.log`);
+  const logFile = path.join(cwd, OUT_DIR, `${stem(mainFile)}.log`);
   const texLog = await readFile(logFile, "utf8").catch(() => "");
   const log = texLog ? `${texLog}\n\n——— latexmk ———\n${res.output}` : res.output;
-  const diagnostics = parseLatexLog(texLog, dir);
+  const diagnostics: Diagnostic[] = parseLatexLog(texLog, cwd).map((d) => ({ ...d, file: d.file ? projectPath(d.file, dir, mainFile) ?? d.file : undefined }));
   if (res.timedOut) diagnostics.unshift({ severity: "error", message: `Compile timed out after ${TIMEOUT_MS / 1000}s` });
   if (res.code !== 0 && !diagnostics.some((d) => d.severity === "error")) {
     diagnostics.unshift({ severity: "error", message: lastUsefulLine(res.output) ?? "LaTeX failed — see the raw log" });
@@ -74,10 +87,12 @@ function field(out: string, name: string): string | undefined {
 
 export async function forwardSearch(workDir: string, mainFile: string, file: string, line: number): Promise<SyncTexForward | null> {
   const dir = await realpath(workDir);
+  const cwd = path.join(dir, mainDir(mainFile));
   const pdf = pdfPath(dir, mainFile);
-  // SyncTeX may have recorded the input as "./x.tex" or as an absolute path; try both.
-  for (const input of [`./${file}`, path.join(dir, file)]) {
-    const res = await run("synctex", ["view", "-i", `${line}:0:${input}`, "-o", pdf], { cwd: dir, timeoutMs: 10_000 });
+  const rel = path.posix.relative(mainDir(mainFile) || ".", file);
+  // SyncTeX may have recorded the input relative to the main file's folder or as an absolute path; try both.
+  for (const input of [rel.startsWith("..") ? rel : `./${rel}`, path.join(dir, file)]) {
+    const res = await run("synctex", ["view", "-i", `${line}:0:${input}`, "-o", pdf], { cwd, timeoutMs: 10_000 });
     const page = Number(field(res.output, "Page"));
     if (!page) continue;
     const h = Number(field(res.output, "h")), v = Number(field(res.output, "v"));
@@ -89,10 +104,11 @@ export async function forwardSearch(workDir: string, mainFile: string, file: str
 
 export async function inverseSearch(workDir: string, mainFile: string, page: number, x: number, y: number): Promise<SyncTexInverse | null> {
   const dir = await realpath(workDir);
-  const res = await run("synctex", ["edit", "-o", `${page}:${x}:${y}:${pdfPath(dir, mainFile)}`], { cwd: dir, timeoutMs: 10_000 });
+  const cwd = path.join(dir, mainDir(mainFile));
+  const res = await run("synctex", ["edit", "-o", `${page}:${x}:${y}:${pdfPath(dir, mainFile)}`], { cwd, timeoutMs: 10_000 });
   const input = field(res.output, "Input");
   const line = Number(field(res.output, "Line"));
   if (!input || !line) return null;
-  const file = toProjectPath(input, dir);
+  const file = projectPath(input, dir, mainFile);
   return file ? { file, line } : null;
 }

@@ -13,8 +13,9 @@ export const WEB_DIST = path.resolve(import.meta.dirname, "../../web/dist");
 export const COMPILE_URL = process.env.COMPILE_URL ?? "http://compile:8788";
 export const COMPILE_TOKEN = process.env.COMPILE_TOKEN;
 
-/** Shared group password (optional when GitHub login is configured). */
-export const PASSWORD = process.env.MARGIN_PASSWORD || undefined;
+/** Shared group password (optional when GitHub login is configured; disabled in invite-only workspaces). */
+export const PASSWORD = (process.env.MARGIN_ADMINS ? undefined : process.env.MARGIN_PASSWORD) || undefined;
+if (process.env.MARGIN_ADMINS && process.env.MARGIN_PASSWORD) console.warn("MARGIN_PASSWORD is ignored: the workspace is invite-only (MARGIN_ADMINS is set).");
 
 /** GitHub OAuth app. Only logins in MARGIN_GITHUB_ALLOW may sign in ("*" = anyone). */
 export const GITHUB = process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET
@@ -26,6 +27,17 @@ export const GITHUB = process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_
       apiUrl: process.env.GITHUB_API_URL ?? "https://api.github.com",
     }
   : null;
+
+/**
+ * Invite-only workspace: set MARGIN_ADMINS to the GitHub logins of the admins.
+ * Only admins and invited members can sign in; the shared password is disabled.
+ */
+export const ADMINS = (process.env.MARGIN_ADMINS ?? "").split(",").map((s) => s.trim().replace(/^@/, "").toLowerCase()).filter(Boolean);
+export const INVITE_ONLY = ADMINS.length > 0;
+if (INVITE_ONLY && !GITHUB) {
+  console.error("MARGIN_ADMINS (invite-only) needs GitHub sign-in: set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.");
+  if (isProd) process.exit(1);
+}
 
 /** Public origin for OAuth redirects, e.g. https://paper.example.com (defaults to the request's host). */
 export const PUBLIC_URL = process.env.MARGIN_PUBLIC_URL?.replace(/\/$/, "");
@@ -52,7 +64,7 @@ if (isProd && (OPEN_ACCESS || !process.env.MARGIN_SECRET)) {
   console.error("Production needs MARGIN_SECRET plus MARGIN_PASSWORD and/or GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET.");
   process.exit(1);
 }
-if (GITHUB && GITHUB.allow.length === 0) {
+if (GITHUB && GITHUB.allow.length === 0 && !process.env.MARGIN_ADMINS) {
   console.warn("GitHub login is configured but MARGIN_GITHUB_ALLOW is empty, so nobody can sign in with GitHub.");
 }
 /** Signs cookies and encrypts stored API keys. In development a random one is kept in DATA_DIR. */

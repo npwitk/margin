@@ -1,4 +1,23 @@
 {$MARGIN_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy server:8787
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# Uploads and imports can be large; LaTeX compiles and AI reviews can take a while.
+	request_body {
+		max_size 120MB
+	}
+	reverse_proxy server:8787 {
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+		}
+	}
 }

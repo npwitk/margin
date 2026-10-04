@@ -2,7 +2,8 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import type { AuthMethods, Session } from "@margin/shared";
-import { GITHUB, OPEN_ACCESS, PASSWORD, PUBLIC_URL, SECRET, SECURE_COOKIES } from "./config.ts";
+import { GITHUB, INVITE_ONLY, OPEN_ACCESS, PASSWORD, PUBLIC_URL, SECRET, SECURE_COOKIES } from "./config.ts";
+import { admit, isActiveMember, peekInvite } from "./workspace.ts";
 import { verifyToken } from "./tokens.ts";
 
 export type AppEnv = { Variables: { session: Session } };
@@ -40,16 +41,21 @@ export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (bearer) {
     const owner = await verifyToken(bearer);
     if (!owner) return c.json({ error: "Invalid access token" }, 401);
+    if (!(await isActiveMember(owner))) return c.json({ error: "This token's owner is no longer a member of this workspace" }, 401);
     c.set("session", { name: owner.name, github: owner.github, agent: agentName(c.req.header("x-margin-agent")) });
     return next();
   }
   const session = await readSession(c);
   if (!session) return c.json({ error: "unauthorized" }, 401);
+  if (!(await isActiveMember(session))) {
+    deleteCookie(c, COOKIE, { path: "/" });
+    return c.json({ error: "Your access to this workspace was removed" }, 401);
+  }
   c.set("session", session);
   await next();
 };
 
-const methods: AuthMethods = { password: !!PASSWORD, github: !!GITHUB, open: OPEN_ACCESS };
+const methods: AuthMethods = { password: !!PASSWORD, github: !!GITHUB, open: OPEN_ACCESS, inviteOnly: INVITE_ONLY };
 
 async function startSession(c: Context, session: Session) {
   await setSignedCookie(c, COOKIE, JSON.stringify(session), SECRET, {
@@ -62,7 +68,16 @@ const fail = (c: Context, message: string) => c.redirect(`/?auth_error=${encodeU
 
 export const authRoutes = new Hono<AppEnv>()
   .get("/session", async (c) => {
-    return c.json({ session: await readSession(c), passwordRequired: !!PASSWORD, methods });
+    const s = await readSession(c);
+    return c.json({ session: s && (await isActiveMember(s)) ? s : null, passwordRequired: !!PASSWORD, methods });
+  })
+
+  // Invite links: /api/auth/invite/<token> remembers the invite, then the person signs in with GitHub.
+  .get("/auth/invite/:token", async (c) => {
+    const token = c.req.param("token");
+    if (!(await peekInvite(token))) return fail(c, "This invite link has expired or was already used. Ask for a new one.");
+    await setSignedCookie(c, "margin_invite", token, SECRET, { httpOnly: true, sameSite: "Lax", secure: SECURE_COOKIES, path: "/api/auth", maxAge: 3600 });
+    return c.redirect("/?invited=1");
   })
 
   // ── GitHub OAuth ───────────────────────────────────────────────────────
@@ -93,11 +108,12 @@ export const authRoutes = new Hono<AppEnv>()
     }).then((r) => (r.ok ? r.json() as Promise<{ login: string; name?: string | null; avatar_url?: string }> : null)).catch(() => null);
     if (!user?.login) return fail(c, "Couldn't read your GitHub profile");
 
-    const login = user.login.toLowerCase();
-    if (!GITHUB.allow.includes("*") && !GITHUB.allow.includes(login)) {
-      return fail(c, `@${user.login} isn't on this workspace's access list. Ask the owner to add you.`);
-    }
-    await startSession(c, { name: (user.name?.trim() || user.login).slice(0, 40), github: user.login, avatar: user.avatar_url });
+    const name = (user.name?.trim() || user.login).slice(0, 40);
+    const invite = (await getSignedCookie(c, SECRET, "margin_invite")) || undefined;
+    const verdict = await admit({ login: user.login, name, avatar: user.avatar_url }, invite);
+    if (!verdict.ok) return fail(c, verdict.reason);
+    if (invite) deleteCookie(c, "margin_invite", { path: "/api/auth" });
+    await startSession(c, { name, github: user.login, avatar: user.avatar_url });
     return c.redirect("/");
   })
   .post("/login", async (c) => {

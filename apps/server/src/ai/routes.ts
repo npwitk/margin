@@ -12,6 +12,7 @@ import { getReview, listReviews, listSkills, startReview } from "./reviewer.ts";
 import { agentToolList, runTool } from "./tools.ts";
 import { startFromIdea } from "./ideaToPaper.ts";
 import { applyAgentChange, snapshot } from "../connect/apply.ts";
+import { cancelThread } from "../connect/relay.ts";
 import { limit } from "../ratelimit.ts";
 import { setAgentActivity } from "../collab.ts";
 import { getProject } from "../storage.ts";
@@ -103,17 +104,22 @@ export const aiProjectRoutes = new Hono<AppEnv>()
   })
 
   // Reviewer
-  .get("/:id/ai/skills", async (c) => c.json((await listSkills()).map(({ body: _b, ...s }) => s)))
+  .get("/:id/ai/skills", async (c) => c.json((await listSkills()).map(({ body: _b, meta: _m, ...s }) => s)))
   .get("/:id/ai/reviews", async (c) => c.json(await listReviews(c.req.param("id"))))
+  .post("/:id/ai/reviews/:review/cancel", async (c) => {
+    const r = await getReview(c.req.param("id"), c.req.param("review"));
+    if (r?.runner) await cancelThread(c.get("session"), r.runner.threadId);
+    return c.json({ ok: true });
+  })
   .get("/:id/ai/reviews/:review", async (c) => {
     const r = await getReview(c.req.param("id"), c.req.param("review"));
     if (!r) throw new HttpError(404, "Review not found");
     return c.json(r);
   })
   .post("/:id/ai/reviews", limit("review", 20, 3600), async (c) => {
-    const { skill, goal } = await c.req.json<{ skill?: string; goal?: string }>();
+    const { skill, goal, runner } = await c.req.json<{ skill?: string; goal?: string; runner?: { deviceId: string; agentId: string } }>();
     try {
-      return c.json(await startReview(c.req.param("id"), c.get("session"), skill ?? "general", goal), 202);
+      return c.json(await startReview(c.req.param("id"), c.get("session"), skill ?? "general", goal, runner), 202);
     } catch (err) {
       throw wrap(err);
     }

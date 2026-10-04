@@ -1,0 +1,4 @@
+# Local smoke test only: different host ports so it doesn't clash with anything.
+services:
+  caddy:
+    ports: !override ["8080:80", "8443:443"]

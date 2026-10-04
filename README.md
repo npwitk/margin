@@ -38,7 +38,16 @@ Collab runs inside the API server (Hocuspocus over `/api/collab`). Files on disk
 Claude (`claude-opus-5-5`) is built in. Bring your own key: each member adds their Anthropic API key in **AI settings**, stored encrypted on the server. A workspace can also set a shared `ANTHROPIC_API_KEY`.
 - **Assistant** (preview pane → ✦ Assistant): chats shared with the project. Claude reads and searches files, compiles, checks the board and searches the web for literature. It **never edits directly**: changes arrive as suggestions and comments in the Review panel, and teammates see "Claude for <name>" working live.
 - **Fix with Claude:** a button on every compile error.
-- **AI review** (Review view): set your publishing goal, pick a rubric from `skills/*.md`, and get a 1–10 readiness score per criterion with concrete issues pinned to the exact text. One click turns an issue into a comment. Rubrics are plain Markdown, so add your venue's.
+- **AI review** (Review view): set your publishing goal and pick a skill from `skills/*.md`:
+  - **Review panels** run several specialist reviewers in parallel over one cached copy of the paper, adapted from Claes Bäckman's [AI-research-feedback](https://github.com/claesbackman/AI-research-feedback) skills (MIT) and generalised from economics to any field:
+    - **Referee panel**, 8 reviewers: copy editing, consistency, claims, maths, tables and figures, a referee, and an advocate and a skeptic of the contribution.
+    - **Quick check**, 2 reviewers.
+    - **Mechanical checks**, 3 reviewers.
+    - Findings are tagged CRITICAL, MAJOR or MINOR and pinned to file and line. Margin turns them into a 1–10 score, a recommendation, the advocate-vs-skeptic synthesis and priority action items, and saves the skill-style report to `reviews/` next to the main file.
+  - **Run with your subscription:** choose *Claude Code* or *Codex* under **Run with** (needs Margin Connect). Margin sends one request; Claude Code runs the reviewers as parallel subagents, and Codex runs them in sequence. The agent works in a read-only copy and answers in a fixed JSON format, which Margin scores exactly like an API review. Using a subscription through third-party apps is subject to each provider's terms.
+  - **Single-reviewer rubrics** score a venue rubric in one pass.
+  - A skill is a Markdown file (`kind: panel` with `## lens:` sections, or a plain rubric). One click turns any finding into a comment.
+- **Markdown reader:** `.md` files (notes, paper summaries, review reports) open rendered and update live as people edit, with a Read/Edit toggle. YAML front matter shows as a metadata card.
 - **Citation checker** (preview pane → Citations): every `.bib` entry is checked against Crossref and OpenAlex. Made-up, mismatched or wrong-DOI references and `\cite` keys missing from the `.bib` are flagged. **Add by DOI** appends clean BibTeX.
 
 Refusals fall back automatically (`fallbacks: "default"`); the agent's history is append-only and prompt-cached.

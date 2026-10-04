@@ -8,19 +8,44 @@ import { DATA_DIR, SKILLS_DIR } from "../config.ts";
 import { getProject, projectDir } from "../storage.ts";
 import { FALLBACK, MODEL, clientFor, describeApiError } from "./client.ts";
 import { flattenPaper, locateQuote, textFiles, textOf } from "./paper.ts";
+import { agentPanelPrompt, consolidate, parseAgentPanel, parsePanel, runPanel } from "./panel.ts";
+import { setReviewHook, startAgentThread } from "../connect/relay.ts";
+import { emit } from "../collab.ts";
+import { writeText } from "../storage.ts";
+
+/** Save a review report next to the main file, in reviews/, never overwriting (-v2, -v3…). */
+async function saveReport(projectId: string, mainFile: string, prefix: string, markdown: string) {
+  const dir = path.posix.dirname(mainFile) === "." ? "reviews" : `${path.posix.dirname(mainFile)}/reviews`;
+  const date = new Date().toISOString().slice(0, 10);
+  for (let v = 1; v < 100; v++) {
+    const rel = `${dir}/${prefix}_${date}${v > 1 ? `-v${v}` : ""}.md`;
+    if ((await textOf(projectId, rel)) !== null) continue;
+    await writeText(projectId, rel, markdown);
+    emit(projectId, "filesVersion", Date.now());
+    return rel;
+  }
+  return undefined;
+}
 
 // ── Skills (rubrics) ──────────────────────────────────────────────────────
 
-interface Skill extends ReviewSkill { body: string }
+interface Skill extends ReviewSkill { body: string; meta: Record<string, string> }
 
 export async function listSkills(): Promise<Skill[]> {
   const names = (await readdir(SKILLS_DIR).catch(() => [] as string[])).filter((n) => n.endsWith(".md")).sort();
-  return Promise.all(names.map(async (n) => {
+  const skills = await Promise.all(names.map(async (n): Promise<Skill> => {
     const raw = await readFile(path.join(SKILLS_DIR, n), "utf8");
     const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
     const meta = Object.fromEntries((m?.[1] ?? "").split("\n").map((l) => l.split(/:\s*(.*)/s).slice(0, 2).map((s) => s.trim())));
-    return { id: n.slice(0, -3), name: meta.name || n.slice(0, -3), description: meta.description || "", body: (m?.[2] ?? raw).trim() };
+    const body = (m?.[2] ?? raw).trim();
+    const kind = meta.kind === "panel" ? "panel" : "rubric";
+    return {
+      id: n.slice(0, -3), name: meta.name || n.slice(0, -3), description: meta.description || "", body, meta, kind,
+      reviewers: kind === "panel" ? (body.match(/^## lens:/gm) ?? []).length : 1, credit: meta.credit,
+    };
   }));
+  // Panels first: they're the most useful.
+  return skills.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "panel" ? -1 : 1));
 }
 
 // ── Output schema ─────────────────────────────────────────────────────────
@@ -77,13 +102,16 @@ export async function getReview(projectId: string, id: string): Promise<StoredRe
   return readFile(path.join(reviewsDir(projectId), `${id}.json`), "utf8").then((s) => JSON.parse(s) as StoredReview).catch(() => null);
 }
 
+export interface Runner { deviceId: string; agentId: string }
+
 /** Start a review in the background; poll getReview for the result. */
-export async function startReview(projectId: string, session: Session, skillId: string, goalOverride?: string): Promise<StoredReview> {
+export async function startReview(projectId: string, session: Session, skillId: string, goalOverride?: string, runner?: Runner): Promise<StoredReview> {
   const skill = (await listSkills()).find((s) => s.id === skillId);
   if (!skill) throw new Error("Unknown review skill");
-  const client = await clientFor(session); // fail fast without a key
   const project = await getProject(projectId);
   const goal = goalOverride?.trim() || project.goal || "Not specified - assess general readiness for peer review.";
+  if (runner) return startAgentReview(projectId, session, skill, project, goal, runner);
+  const client = await clientFor(session); // fail fast without a key
   const review: StoredReview = { id: crypto.randomUUID(), skill: skill.id, goal, by: session.name, at: new Date().toISOString(), status: "running" };
   await saveReview(projectId, review);
 
@@ -92,6 +120,24 @@ export async function startReview(projectId: string, session: Session, skillId: 
       const paper = await flattenPaper(projectId);
       const bibs = (await textFiles(projectId)).filter((f) => f.path.endsWith(".bib"));
       const bibText = (await Promise.all(bibs.map(async (b) => `%%%%% file ${b.path}\n${await textOf(projectId, b.path)}`))).join("\n\n");
+
+      if (skill.kind === "panel") {
+        const spec = parsePanel(skill.body, skill.meta);
+        let last = 0;
+        const { result, markdown } = await runPanel({
+          client, goal, title: project.name,
+          paperBlock: { type: "text", text: `<paper title="${project.name}">\n${paper.text}\n</paper>\n\n<bibliography>\n${bibText || "(no .bib files)"}\n</bibliography>`, cache_control: { type: "ephemeral" } },
+          locate: (quote) => locateQuote(projectId, quote, paper.files),
+          onProgress: (done, running) => {
+            review.progress = { done, running, total: spec.lenses.length };
+            const now = Date.now();
+            if (now - last > 500) { last = now; void saveReview(projectId, review); }
+          },
+        }, spec);
+        result.panel!.report = await saveReport(projectId, project.mainFile, spec.report, markdown);
+        await saveReview(projectId, { ...review, progress: undefined, status: "done", result });
+        return;
+      }
 
       const stream = client.beta.messages.stream({
         model: MODEL,
@@ -132,3 +178,94 @@ export async function startReview(projectId: string, session: Session, skillId: 
   })();
   return review;
 }
+
+
+// ── Reviews on your own agent (Claude Code, Codex…) through Margin Connect ───
+
+function agentRubricPrompt(skill: Skill, goal: string, mainFile: string) {
+  return `[Margin review] Review the paper in this folder for Margin, the authors' collaborative LaTeX workspace. This is a read-only task: do not create, modify or delete any files.
+
+The main file is ${mainFile}. Read it and every file it \\input/\\includes (recursively), plus its .bib files; that is the paper. Ignore reviews/ folders, previous reports, notes and old drafts.
+
+${SYSTEM}
+
+<rubric name="${skill.name}">
+${skill.body}
+</rubric>
+
+<goal>${goal}</goal>
+
+Finish with your final answer: ONE fenced code block tagged json and nothing after it, matching this JSON Schema exactly:
+${JSON.stringify(z.toJSONSchema(Review))}`;
+}
+
+async function startAgentReview(projectId: string, session: Session, skill: Skill, project: { name: string; mainFile: string }, goal: string, runner: Runner): Promise<StoredReview> {
+  const review: StoredReview = { id: crypto.randomUUID(), skill: skill.id, goal, by: session.name, at: new Date().toISOString(), status: "running" };
+  const prompt = skill.kind === "panel"
+    ? agentPanelPrompt(parsePanel(skill.body, skill.meta), skill.name, goal, project.mainFile)
+    : agentRubricPrompt(skill, goal, project.mainFile);
+  await saveReview(projectId, review);
+  try {
+    const t = await startAgentThread(session, projectId, runner.deviceId, runner.agentId, `Run review: ${skill.name} (${goal})`, prompt, review.id);
+    review.runner = { agent: t.agentName, device: t.deviceName, deviceId: t.deviceId, threadId: t.id };
+    review.activity = [];
+    await saveReview(projectId, review);
+  } catch (err) {
+    await saveReview(projectId, { ...review, status: "error", error: (err as Error).message });
+    throw err;
+  }
+  return review;
+}
+
+const finished = new Set<string>();
+const lastSave = new Map<string, number>();
+
+setReviewHook({
+  activity: (t, text) => {
+    if (!t.reviewId || finished.has(t.reviewId)) return;
+    void getReview(t.projectId, t.reviewId).then((r) => {
+      if (!r || r.status !== "running") return;
+      r.activity = [...(r.activity ?? []).filter((a) => a !== text), text].slice(-8);
+      const now = Date.now();
+      if (now - (lastSave.get(r.id) ?? 0) > 400) { lastSave.set(r.id, now); void saveReview(t.projectId, r); }
+    });
+  },
+  failed: (t, message) => {
+    if (!t.reviewId || finished.has(t.reviewId)) return;
+    finished.add(t.reviewId);
+    void getReview(t.projectId, t.reviewId).then((r) => r && saveReview(t.projectId, { ...r, status: "error", error: message }));
+  },
+  done: (t, answer) => {
+    if (!t.reviewId || finished.has(t.reviewId)) return;
+    finished.add(t.reviewId);
+    void (async () => {
+      const r = await getReview(t.projectId, t.reviewId!);
+      if (!r) return;
+      try {
+        const skill = (await listSkills()).find((x) => x.id === r.skill)!;
+        const project = await getProject(t.projectId);
+        const paper = await flattenPaper(t.projectId);
+        const locate = (quote: string) => locateQuote(t.projectId, quote, paper.files);
+        let result: ReviewResult;
+        if (skill.kind === "panel") {
+          const spec = parsePanel(skill.body, skill.meta);
+          const parsed = parseAgentPanel(answer, spec);
+          const out = await consolidate({ title: project.name, goal: r.goal, locate }, spec, parsed.results, parsed.failed, parsed.coordinator);
+          result = out.result;
+          result.panel!.report = await saveReport(t.projectId, project.mainFile, spec.report, out.markdown.replace("**Margin score**", `**Run on**: ${t.agentName} (${t.deviceName})\n**Margin score**`));
+        } else {
+          const block = [...answer.matchAll(/\`\`\`(?:json)?\s*\n([\s\S]*?)\n\`\`\`/g)].map((m) => m[1]).pop() ?? answer.slice(answer.indexOf("{"), answer.lastIndexOf("}") + 1);
+          result = Review.parse(JSON.parse(block)) as ReviewResult;
+          for (const c of result.criteria) for (const issue of c.issues) {
+            const hit = await locate(issue.quote);
+            if (hit) { issue.file = hit.file; issue.line = hit.line; }
+          }
+        }
+        await saveReview(t.projectId, { ...r, status: "done", result, activity: undefined });
+      } catch (err) {
+        console.error("agent review:", err);
+        await saveReview(t.projectId, { ...r, status: "error", error: (err as Error).message.startsWith("The agent") ? (err as Error).message : `Couldn't read ${t.agentName}'s review: ${(err as Error).message}` });
+      }
+    })();
+  },
+});

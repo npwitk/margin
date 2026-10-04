@@ -124,7 +124,7 @@ export class AgentRun {
         await this.ws.pull();
         let full = `${by}: ${text}`;
         if (this.first) {
-          full = `${context(this.ws.title, this.spec.name, mode)}${this.handoff ? `\n\nYou're taking over this conversation from another agent. Transcript so far:\n<transcript>\n${this.handoff}\n</transcript>\n` : ""}\n\n${full}`;
+          full = `${this.ws.readonly ? readonlyContext(this.ws.title, this.spec.name) : context(this.ws.title, this.spec.name, mode)}${this.handoff ? `\n\nYou're taking over this conversation from another agent. Transcript so far:\n<transcript>\n${this.handoff}\n</transcript>\n` : ""}\n\n${full}`;
           this.first = false;
         }
         const res = await this.conn!.prompt({ sessionId: this.sessionId!, prompt: [{ type: "text", text: full }] });
@@ -167,6 +167,10 @@ function context(title: string, agent: string, mode: ApplyMode) {
   return `[Margin] You're working in a local copy of the Margin project "${title}", a LaTeX paper that co-authors edit live in their browsers. ` +
     `Files you change here are synced into the shared paper ${mode === "edit" ? "as direct edits everyone sees immediately" : "as suggestions the authors review and accept"}, merged with their latest edits. ` +
     `Keep changes focused, don't push with git, and use the "margin" MCP tools for the board, review comments and compiling the shared paper. You are ${agent}.`;
+}
+
+function readonlyContext(title: string, agent: string) {
+  return `[Margin] This folder is a read-only copy of the Margin project "${title}", refreshed from the shared paper for this task. Nothing you change here is synced back. You are ${agent}.`;
 }
 
 function friendly(spec: AgentSpec, err: unknown) {

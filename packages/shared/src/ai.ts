@@ -67,6 +67,32 @@ export interface ReviewSkill {
   id: string;
   name: string;
   description: string;
+  /** "rubric": one reviewer with a rubric. "panel": several specialist reviewers in parallel. */
+  kind: "rubric" | "panel";
+  reviewers?: number;
+  credit?: string;
+}
+
+export type ContributionRating = "transformative" | "significant" | "incremental" | "insufficient";
+export type Recommendation = "send to referees" | "revise before sending" | "desk reject";
+
+/** Extra results from a panel review. */
+export interface PanelResult {
+  recommendation?: Recommendation;
+  contribution?: {
+    advocate?: { rating: ContributionRating; justification: string; summary: string };
+    skeptic?: { rating: ContributionRating; justification: string; summary: string };
+    synthesis: string;
+    crux?: string;
+  };
+  counts: { critical: number; major: number; minor: number };
+  questions: string[];
+  /** Project path of the Markdown report saved in reviews/. */
+  report?: string;
+  /** Reviewers that failed (their section is a placeholder). */
+  failed: string[];
+  credit?: string;
+  scoring: "venue" | "defects";
 }
 
 export type IssueSeverity = "high" | "medium" | "low";
@@ -77,6 +103,11 @@ export interface ReviewIssue {
   problem: string;
   suggestion: string;
   severity: IssueSeverity;
+  /** Panel reviews keep the original tag. */
+  tag?: "CRITICAL" | "MAJOR" | "MINOR";
+  location?: string;
+  /** Which reviewer raised it. */
+  lens?: string;
   /** Resolved by the server: where the quote is in the project. */
   file?: string;
   line?: number;
@@ -99,6 +130,7 @@ export interface ReviewResult {
   strengths: string[];
   top_priorities: string[];
   criteria: ReviewCriterion[];
+  panel?: PanelResult;
 }
 
 export interface PaperReview {
@@ -108,6 +140,12 @@ export interface PaperReview {
   by: string;
   at: string;
   result: ReviewResult;
+  /** While a panel runs: which reviewers have finished. */
+  progress?: { done: string[]; running: string[]; total: number };
+  /** Set when the review ran on your own agent through Margin Connect. */
+  runner?: { agent: string; device: string; deviceId: string; threadId: string };
+  /** Recent agent activity while it runs (subagents, files read). */
+  activity?: string[];
 }
 
 // Citations
