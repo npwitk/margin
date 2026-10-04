@@ -1,4 +1,5 @@
 import type {
+  CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
   AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
@@ -114,6 +115,15 @@ export const api = {
     req<{ id: string }>(`${P(id)}/review`, json("POST", body)),
   citations: (id: string) => req<CitationReport>(`${P(id)}/citations`),
   addDoi: (id: string, doi: string) => req<{ key: string; file: string; bibtex: string }>(`${P(id)}/citations/doi`, json("POST", { doi })),
+
+  library: () => req<LibraryView>("/library"),
+  libraryAddDois: (dois: string[], projectId?: string) => req<LibraryAddResult & { failed: string[] }>("/library/doi", json("POST", { dois, projectId })),
+  libraryAddBibtex: (text: string, projectId?: string) => req<LibraryAddResult>("/library/bibtex", json("POST", { text, projectId })),
+  libraryImportProject: (projectId: string) => req<LibraryAddResult>("/library/import-project", json("POST", { projectId })),
+  libraryUpdate: (id: string, patch: Partial<Pick<LibraryRef, "key" | "type" | "fields" | "projects" | "note">>) => req<LibraryRef>(`/library/${id}`, json("PATCH", patch)),
+  libraryDelete: (id: string) => req(`/library/${id}`, { method: "DELETE" }),
+  citeOptions: (id: string) => req<CiteOptions>(`${P(id)}/library`),
+  insertFromLibrary: (id: string, refId: string) => req<{ key: string; file: string; added: boolean; note?: string }>(`${P(id)}/library/${refId}`, json("POST")),
 
   access: (id: string) => req<ProjectAccess>(`${P(id)}/access`),
   createInvite: (id: string) => req<{ id: string; token: string; expiresAt: string }>(`${P(id)}/invites`, json("POST")),

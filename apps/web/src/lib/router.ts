@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 
-export type Route = { name: "projects" } | { name: "project"; id: string } | { name: "join"; id: string; token: string };
+export type Route = { name: "projects" } | { name: "library"; project?: string } | { name: "project"; id: string } | { name: "join"; id: string; token: string };
 
 function parse(hash: string): Route {
   const join = /^#\/join\/([a-z0-9-]+)\/([\w-]+)/.exec(hash);
   if (join) return { name: "join", id: join[1], token: join[2] };
+  const lib = /^#\/library(?:\/([a-z0-9-]+|none))?/.exec(hash);
+  if (lib) return { name: "library", project: lib[1] };
   const m = /^#\/p\/([a-z0-9-]+)/.exec(hash);
   return m ? { name: "project", id: m[1] } : { name: "projects" };
 }
@@ -20,5 +22,6 @@ export function useRoute(): Route {
 }
 
 export const navigate = (r: Route) => {
-  location.hash = r.name === "project" ? `#/p/${r.id}` : r.name === "join" ? `#/join/${r.id}/${r.token}` : "#/";
+  location.hash = r.name === "project" ? `#/p/${r.id}` : r.name === "join" ? `#/join/${r.id}/${r.token}`
+    : r.name === "library" ? `#/library${r.project ? `/${r.project}` : ""}` : "#/";
 };

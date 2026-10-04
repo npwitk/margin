@@ -13,6 +13,7 @@ import { ACCESS_MODE, DATA_DIR, GITHUB, INVITE_ONLY, OPEN_ACCESS, PASSWORD, PROJ
 import { aiProjectRoutes, aiSettingsRoutes } from "./ai/routes.ts";
 import { handleGit } from "./gitHttp.ts";
 import { projectRoutes, tokenRoutes, workspaceRoutes } from "./routes.ts";
+import { libraryRoutes, projectLibraryRoutes } from "./library.ts";
 
 const app = new Hono<AppEnv>();
 app.use("*", logger());
@@ -45,12 +46,16 @@ const projectGate: MiddlewareHandler<AppEnv> = async (c, next) => {
 app.use("/api/projects/:id", projectGate);
 app.use("/api/projects/:id/*", projectGate);
 app.route("/api/projects", aiProjectRoutes);
+app.route("/api/projects", projectLibraryRoutes);
 app.route("/api/projects", projectRoutes);
 app.use("/api/ai/*", requireSession);
 app.route("/api/ai", aiSettingsRoutes);
 app.use("/api/workspace/*", requireSession);
 app.use("/api/workspace", requireSession);
 app.route("/api/workspace", workspaceRoutes);
+app.use("/api/library/*", requireSession);
+app.use("/api/library", requireSession);
+app.route("/api/library", libraryRoutes);
 app.use("/api/tokens/*", requireSession);
 app.use("/api/tokens", requireSession);
 app.route("/api/tokens", tokenRoutes);

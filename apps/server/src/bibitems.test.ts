@@ -16,7 +16,7 @@ test("parses IEEE-style \\bibitem entries", () => {
     '\\end{thebibliography}',
   ].join("\n");
   const [a, b] = parseBibitems(tex);
-  assert.deepEqual(a, { key: "ref28", line: 2, fields: { title: "Secure logging as a service", author: "I. Ray", doi: "10.1109/JSYST.2012.2221958", year: "2013" } });
+  assert.deepEqual(a, { key: "ref28", line: 2, fields: { title: "Secure logging as a service", author: "I. Ray", doi: "10.1109/JSYST.2012.2221958", year: "2013", journal: "IEEE Syst. J." } });
   assert.equal(b.key, "ref33");
   assert.equal(b.fields.author, "G. R. Panigrahi");
   assert.equal(b.fields.year, "2024");

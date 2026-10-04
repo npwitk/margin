@@ -14,6 +14,7 @@ import { startFromIdea } from "./ideaToPaper.ts";
 import { applyAgentChange, snapshot } from "../connect/apply.ts";
 import { cancelThread } from "../connect/relay.ts";
 import { limit } from "../ratelimit.ts";
+import { rememberInLibrary } from "../library.ts";
 import { setAgentActivity } from "../collab.ts";
 import { getProject } from "../storage.ts";
 import type { Session } from "@margin/shared";
@@ -176,7 +177,9 @@ export const aiProjectRoutes = new Hono<AppEnv>()
   .post("/:id/citations/doi", async (c) => {
     const { doi, file } = await c.req.json<{ doi?: string; file?: string }>();
     try {
-      return c.json(await addByDoi(c.req.param("id"), c.get("session"), doi ?? "", file), 201);
+      const added = await addByDoi(c.req.param("id"), c.get("session"), doi ?? "", file);
+      void rememberInLibrary({ key: added.key, type: added.type, fields: added.fields }, c.get("session"), c.req.param("id"));
+      return c.json(added, 201);
     } catch (err) {
       throw new HttpError(400, (err as Error).message);
     }

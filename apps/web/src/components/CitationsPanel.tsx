@@ -1,3 +1,4 @@
+import { navigate } from "../lib/router.ts";
 import { useState } from "react";
 import type { CitationReport, CitationStatus } from "@margin/shared";
 import { api } from "../lib/api.ts";
@@ -45,6 +46,8 @@ export function CitationsPanel({ projectId, onOpen, notify }: { projectId: strin
             <button className={`chip ${filter === "all" ? "active" : ""}`} onClick={() => setFilter("all")}>All {report.entries.length}</button>
           </>
         )}
+        <div className="spacer" />
+        <button className="btn ghost tight" onClick={() => navigate({ name: "library", project: projectId })} title="The group's shared references, filed by paper"><Icon name="book" size={12} />Library</button>
       </div>
       <form className="row gap doi-form" onSubmit={add}>
         <input className="input" placeholder="Add a reference by DOI, e.g. 10.1145/3292500.3330701" value={doi} onChange={(e) => setDoi(e.target.value)} />

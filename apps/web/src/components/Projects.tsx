@@ -40,6 +40,7 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
         <div className="logo">M</div>
         <span className="project-name static">Margin</span>
         <div className="spacer" />
+        <button className="btn ghost" onClick={() => navigate({ name: "library" })}><Icon name="book" size={13} />Library</button>
         <button className="btn ghost" onClick={() => setMembersOpen(true)}><Icon name="plus" size={13} />{admin ? "Members & invites" : "Members"}</button>
         <span className="muted small">{session.name}</span>
         <button className="icon-btn" title="Sign out" onClick={async () => { await api.logout(); onLogout(); }}><Icon name="logout" /></button>

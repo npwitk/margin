@@ -1,5 +1,5 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type Completion, type CompletionContext } from "@codemirror/autocomplete";
 import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import {
   HighlightStyle, StreamLanguage, bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting,
@@ -14,6 +14,7 @@ import {
 import { tags as t } from "@lezer/highlight";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import * as Y from "yjs";
+import type { CiteOptions } from "@margin/shared";
 import type { ProjectCollab } from "../lib/collab.ts";
 import { reviewDecorations } from "../lib/review.ts";
 
@@ -38,6 +39,10 @@ interface Props {
   onComment(): void;
   onThreadClick(id: string): void;
   onError(message: string): void;
+  /** References for \cite completion: the paper's own, then the library's. */
+  citeOptions?(): Promise<CiteOptions>;
+  /** A library reference was picked: put it in the paper; resolves to the key to cite. */
+  onLibraryCite?(refId: string, key: string): Promise<string>;
 }
 
 const highlight = HighlightStyle.define([
@@ -82,6 +87,43 @@ const setup = [
   keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...foldKeymap, ...completionKeymap, ...yUndoManagerKeymap, indentWithTab]),
 ];
 
+const CITE_OPEN = /\\[a-zA-Z]*cite[a-zA-Z]*\*?\s*(?:\[[^\]\n]*\]\s*){0,2}\{[^}\n]*$/;
+const PAPER = { name: "In this paper", rank: 0 };
+const LIBRARY = { name: "From library", rank: 1 };
+
+/** Completions inside \cite{…}, \citep{…}, \parencite{…} etc. */
+function citeCompletions(get: () => Props) {
+  return async (ctx: CompletionContext) => {
+    const line = ctx.state.doc.lineAt(ctx.pos);
+    if (!CITE_OPEN.test(line.text.slice(0, ctx.pos - line.from))) return null;
+    const word = ctx.matchBefore(/[^{},\s]*/);
+    const load = get().citeOptions;
+    if (!load || !word) return null;
+    let opts: CiteOptions;
+    try { opts = await load(); } catch { return null; }
+    if (ctx.aborted) return null;
+    const short = (s: string) => (s.length > 60 ? `${s.slice(0, 58)}…` : s);
+    const options: Completion[] = [
+      ...opts.paper.map((o) => ({ label: o.key, detail: short(o.title), info: o.byline || undefined, section: PAPER, type: "text", boost: 1 })),
+      ...opts.library.map((o) => ({
+        label: o.key, detail: short(o.title), info: o.byline ? `${o.byline} · adds it to this paper` : "Adds it to this paper", section: LIBRARY, type: "text",
+        apply: (view: EditorView, _c: Completion, from: number, to: number) => {
+          view.dispatch({ changes: { from, to, insert: o.key }, selection: { anchor: from + o.key.length } });
+          const onPick = get().onLibraryCite;
+          if (!onPick || !o.refId) return;
+          void onPick(o.refId, o.key).then((key) => {
+            // The paper may already have this reference under another key.
+            if (key === o.key) return;
+            const at = view.state.sliceDoc(from, from + o.key.length) === o.key ? from : -1;
+            if (at >= 0) view.dispatch({ changes: { from: at, to: at + o.key.length, insert: key } });
+          }).catch(() => {});
+        },
+      })),
+    ];
+    return { from: word.from, options, validFor: /^[^{},\s]*$/, filter: true };
+  };
+}
+
 export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -91,6 +133,11 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
   const pendingReveal = useRef<number | null>(null);
   const p = useRef(props);
   p.current = props;
+  // One stable source: CodeMirror drops pending results when the source's identity changes.
+  const [citeData] = useState(() => {
+    const data = [{ autocomplete: citeCompletions(() => p.current) }];
+    return EditorState.languageData.of(() => data);
+  });
 
   const reveal = (line: number) => {
     const v = view.current;
@@ -139,6 +186,7 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
         extensions: [
           setup,
           StreamLanguage.define(stex),
+          citeData,
           syntaxHighlighting(highlight),
           EditorView.lineWrapping,
           theme,

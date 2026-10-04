@@ -153,6 +153,8 @@ export function parseBibitems(text: string) {
       // IEEE style lists "A. One, B. Two, and C. Three" or "A. One et al."; keep the first author.
       const first = body.slice(0, title.index).split(/,|\s+and\s+/)[0].replace(/\\textit\{\s*et al\.?\s*\}|\bet al\.?/g, "").trim();
       if (first) fields.author = first;
+      const venue = body.slice(title.index! + title[0].length).match(/\\(?:textit|emph)\{([^}]+)\}/);
+      if (venue) fields.journal = venue[1].trim();
     }
     const doi = body.match(/doi:?\s*(10\.\d{4,9}\/[^\s,;}]+)/i);
     if (doi) fields.doi = doi[1].replace(/\.$/, "");
@@ -199,14 +201,23 @@ export async function checkCitations(projectId: string): Promise<CitationReport>
 }
 
 /** Fetch BibTeX for a DOI and append it to a .bib file through the live document. */
-export async function addByDoi(projectId: string, session: Session, rawDoi: string, bibPath?: string) {
-  const doi = rawDoi.trim().replace(/^https?:\/\/(dx\.)?doi\.org\//, "").replace(/^doi:/i, "");
+/** BibTeX for a DOI, from the DOI resolver. */
+export async function fetchDoiBibtex(rawDoi: string) {
+  const doi = rawDoi.trim().replace(/^https?:\/\/(dx\.)?doi\.org\//, "").replace(/^doi:/i, "").trim();
   if (!/^10\.\d{4,9}\/\S+$/.test(doi)) throw new Error("That doesn't look like a DOI (e.g. 10.1145/3292500.3330701)");
   const res = await fetch(`${DOI_RESOLVER}/${doi}`, { headers: { accept: "application/x-bibtex", "user-agent": UA }, redirect: "follow", signal: AbortSignal.timeout(12_000) }).catch(() => null);
-  if (!res?.ok) throw new Error(res?.status === 404 ? "DOI not found" : "Couldn't fetch metadata for that DOI");
-  let bib = (await res.text()).trim();
+  if (!res?.ok) throw new Error(res?.status === 404 ? `DOI not found: ${doi}` : `Couldn't fetch metadata for ${doi}`);
+  const bib = (await res.text()).trim();
   const [entry] = parseBibtex(bib);
   if (!entry) throw new Error("The DOI service returned no BibTeX");
+  if (!entry.fields.doi) entry.fields.doi = doi;
+  return { doi, bib, entry };
+}
+
+export async function addByDoi(projectId: string, session: Session, rawDoi: string, bibPath?: string) {
+  const fetched = await fetchDoiBibtex(rawDoi);
+  const { doi, entry } = fetched;
+  let { bib } = fetched;
 
   const bibs = (await textFiles(projectId)).filter((f) => f.path.endsWith(".bib")).map((f) => f.path);
   const target = bibPath ?? bibs[0] ?? "refs/references.bib";
@@ -224,5 +235,5 @@ export async function addByDoi(projectId: string, session: Session, rawDoi: stri
   const next = `${current.replace(/\s*$/, "")}${current.trim() ? "\n\n" : ""}${bib}\n`;
   if (bibs.includes(target)) await writeThroughCollab(projectId, target, next, session);
   else await writeText(projectId, target, next);
-  return { key, file: target, bibtex: bib };
+  return { key, file: target, bibtex: bib, type: entry.type, fields: entry.fields };
 }

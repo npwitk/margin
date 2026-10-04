@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isTextPath, type AiSettings, type CompileResult, type Diagnostic, type Engine, type FileEntry, type Project, type Session, type SyncTexForward } from "@margin/shared";
+import { isTextPath, type AiSettings, type CompileResult, type Diagnostic, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
 import { useThreads } from "../lib/review.ts";
@@ -98,6 +98,23 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     const t = window.setTimeout(() => setToast(null), 3500);
     return () => window.clearTimeout(t);
   }, [toast]);
+
+  // \cite completion: the paper's references and the library's, refreshed every few seconds.
+  const citeCache = useRef<{ at: number; data: Promise<CiteOptions> } | null>(null);
+  const citeOptions = useCallback(() => {
+    if (!citeCache.current || Date.now() - citeCache.current.at > 15_000) {
+      const data = api.citeOptions(projectId);
+      citeCache.current = { at: Date.now(), data };
+      data.catch(() => { citeCache.current = null; });
+    }
+    return citeCache.current.data;
+  }, [projectId]);
+  const libraryCite = useCallback(async (refId: string) => {
+    const r = await api.insertFromLibrary(projectId, refId);
+    citeCache.current = null;
+    notify(r.note ?? (r.added ? `Added ${r.key} to ${r.file}` : `${r.file} already has it as ${r.key}`));
+    return r.key;
+  }, [projectId, notify]);
 
   const ask = (req: Omit<PromptRequest, "resolve">) => new Promise<string | null>((resolve) => setPrompt({ ...req, resolve }));
 
@@ -389,6 +406,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     const cmds: Command[] = [
       { id: "compile", label: "Compile", section: "Action", icon: "play", hint: `${MOD}S`, run: compile },
       { id: "checkpoint", label: "Create checkpoint…", section: "Action", icon: "history", run: () => setHistoryOpen(true) },
+      { id: "library", label: "Open reference library", section: "Action", icon: "book", run: () => navigate({ name: "library", project: projectId }) },
       { id: "ai-review", label: "AI review of the paper", section: "AI", icon: "star", run: () => setView("review") },
       { id: "assistant", label: "Ask Claude…", section: "AI", icon: "comment", run: () => { setView("write"); setPreviewTab("assistant"); } },
       { id: "citations", label: "Check citations", section: "AI", icon: "book", run: () => { setView("write"); setPreviewTab("citations"); } },
@@ -544,6 +562,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     onCompile={compile}
                     onForwardSync={(p, l) => void forwardSync(p, l)}
                     onError={notify}
+                    citeOptions={citeOptions}
+                    onLibraryCite={libraryCite}
                   />
                 </div>
               )}
