@@ -5,6 +5,8 @@ export interface Project {
   name: string;
   mainFile: string;
   engine: Engine;
+  /** What the paper is aiming for, e.g. "NeurIPS 2027 main track". Used by the AI reviewer. */
+  goal?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -111,10 +113,10 @@ export interface Task {
 
 /** What each connected member broadcasts on the project room's awareness. */
 export interface PresenceState {
-  user: { name: string; color: string; avatar?: string };
+  user: { name: string; color: string; avatar?: string; agent?: boolean };
   file?: string | null;
   line?: number;
-  view?: "write" | "board";
+  view?: "write" | "board" | "review";
 }
 
 /** Live events the server pushes through the project room. */

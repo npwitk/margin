@@ -1,6 +1,8 @@
 import type {
-  AuthMethods, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
+  AiSettings, AuthMethods, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
+
+export type StoredReview = Omit<PaperReview, "result"> & { status: "running" | "done" | "error"; error?: string; result?: PaperReview["result"] };
 
 export interface AccessToken { id: string; label: string; createdAt: string; lastUsedAt?: string }
 
@@ -33,7 +35,7 @@ export const api = {
   projects: () => req<Project[]>("/projects"),
   createProject: (name: string, template: string) => req<Project>("/projects", json("POST", { name, template })),
   project: (id: string) => req<Project>(P(id)),
-  updateProject: (id: string, patch: Partial<{ name: string; mainFile: string; engine: Engine }>) =>
+  updateProject: (id: string, patch: Partial<{ name: string; mainFile: string; engine: Engine; goal: string }>) =>
     req<Project>(P(id), json("PATCH", patch)),
 
   files: (id: string) => req<FileEntry[]>(`${P(id)}/files`),
@@ -61,6 +63,48 @@ export const api = {
   tokens: () => req<AccessToken[]>("/tokens"),
   createToken: (label: string) => req<AccessToken & { token: string }>("/tokens", json("POST", { label })),
   revokeToken: (tid: string) => req(`/tokens/${tid}`, { method: "DELETE" }),
+
+  aiSettings: () => req<AiSettings>("/ai/settings"),
+  saveAiKey: (apiKey: string) => req<{ ok: true; last4: string }>("/ai/key", json("PUT", { apiKey })),
+  deleteAiKey: () => req("/ai/key", { method: "DELETE" }),
+  chats: (id: string) => req<ChatSummary[]>(`${P(id)}/ai/chats`),
+  createChat: (id: string, title?: string) => req<Chat>(`${P(id)}/ai/chats`, json("POST", { title })),
+  chat: (id: string, chatId: string) => req<Chat>(`${P(id)}/ai/chats/${chatId}`),
+  deleteChat: (id: string, chatId: string) => req(`${P(id)}/ai/chats/${chatId}`, { method: "DELETE" }),
+  stopChat: (id: string, chatId: string) => req(`${P(id)}/ai/chats/${chatId}/stop`, json("POST")),
+  /** Send a message; calls onEvent for each streamed event until the turn is done. */
+  async sendChat(id: string, chatId: string, text: string, onEvent: (e: ChatEvent) => void) {
+    const res = await fetch(`/api${P(id)}/ai/chats/${chatId}/messages`, {
+      method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+    });
+    if (!res.ok || !res.body) {
+      const body = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, body.error ?? res.statusText);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let i: number;
+      while ((i = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, i);
+        buffer = buffer.slice(i + 2);
+        const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+        if (data) onEvent(JSON.parse(data) as ChatEvent);
+      }
+    }
+  },
+  skills: (id: string) => req<ReviewSkill[]>(`${P(id)}/ai/skills`),
+  reviews: (id: string) => req<StoredReview[]>(`${P(id)}/ai/reviews`),
+  review: (id: string, reviewId: string) => req<StoredReview>(`${P(id)}/ai/reviews/${reviewId}`),
+  startReview: (id: string, skill: string, goal?: string) => req<StoredReview>(`${P(id)}/ai/reviews`, json("POST", { skill, goal })),
+  addThread: (id: string, body: { path: string; quote: string; kind: "comment" | "suggestion"; message?: string; replacement?: string }) =>
+    req<{ id: string }>(`${P(id)}/review`, json("POST", body)),
+  citations: (id: string) => req<CitationReport>(`${P(id)}/citations`),
+  addDoi: (id: string, doi: string) => req<{ key: string; file: string; bibtex: string }>(`${P(id)}/citations/doi`, json("POST", { doi })),
 
   history: (id: string) => req<Checkpoint[]>(`${P(id)}/history`),
   checkpoint: (id: string, message: string) => req<{ checkpoint: Checkpoint | null }>(`${P(id)}/checkpoint`, json("POST", { message })),

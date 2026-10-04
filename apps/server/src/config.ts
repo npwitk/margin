@@ -1,5 +1,6 @@
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -39,5 +40,24 @@ if (isProd && (OPEN_ACCESS || !process.env.MARGIN_SECRET)) {
 if (GITHUB && GITHUB.allow.length === 0) {
   console.warn("GitHub login is configured but MARGIN_GITHUB_ALLOW is empty, so nobody can sign in with GitHub.");
 }
-export const SECRET = process.env.MARGIN_SECRET ?? (isProd ? "" : "dev-secret-" + randomBytes(4).toString("hex"));
+/** Signs cookies and encrypts stored API keys. In development a random one is kept in DATA_DIR. */
+export const SECRET = process.env.MARGIN_SECRET ?? (isProd ? "" : devSecret());
+
+function devSecret() {
+  const file = path.join(DATA_DIR, ".dev-secret");
+  try {
+    return readFileSync(file, "utf8").trim();
+  } catch {
+    const s = randomBytes(32).toString("hex");
+    try {
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(file, s, { mode: 0o600 });
+    } catch {
+      // Read-only or missing data dir (e.g. unit tests): keep it in memory.
+    }
+    return s;
+  }
+}
+
+export const SKILLS_DIR = path.resolve(import.meta.dirname, "../../../skills");
 export const SECURE_COOKIES = isProd;

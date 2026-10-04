@@ -107,7 +107,7 @@ export function FileTree({ projectId, files, openPath, mainFile, dirty, peersByF
           <Icon name={fileIcon(n.path)} size={14} className="tree-icon" />
           <span className={`tree-name ${isTextPath(n.path) ? "" : "muted"}`}>{n.name}</span>
           {n.path === mainFile && <span className="badge">main</span>}
-          {peersByFile.get(n.path)?.slice(0, 3).map((p) => <Avatar key={p.clientId} name={p.user.name} size="xs" title={`${p.user.name} is editing`} />)}
+          {peersByFile.get(n.path)?.slice(0, 3).map((p) => <Avatar key={p.clientId} name={p.user.name} agent={p.user.agent} size="xs" title={p.user.agent ? p.user.name : `${p.user.name} is editing`} />)}
           {dirty.has(n.path) && <span className="dot" title="Sending edits…" />}
         </button>
       );

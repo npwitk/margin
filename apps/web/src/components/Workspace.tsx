@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isTextPath, type CompileResult, type Diagnostic, type Engine, type FileEntry, type Project, type Session, type SyncTexForward } from "@margin/shared";
+import { isTextPath, type AiSettings, type CompileResult, type Diagnostic, type Engine, type FileEntry, type Project, type Session, type SyncTexForward } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
 import { useThreads } from "../lib/review.ts";
 import { ReviewPanel, type Draft } from "./ReviewPanel.tsx";
 import { LocalDialog } from "./LocalDialog.tsx";
+import { AiSettingsDialog } from "./AiSettingsDialog.tsx";
+import { AssistantPanel } from "./AssistantPanel.tsx";
+import { CitationsPanel } from "./CitationsPanel.tsx";
+import { ReviewView } from "./ReviewView.tsx";
+import { useYMap } from "../lib/collab.ts";
 import { navigate } from "../lib/router.ts";
 import { load, save } from "../lib/storage.ts";
 import { CommandPalette, type Command } from "./CommandPalette.tsx";
@@ -46,7 +51,11 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [toast, setToast] = useState<string | null>(null);
   const [split, setSplit] = useState(() => load("split", 0.5));
   const [sidebar, setSidebar] = useState(() => load("sidebar", true));
-  const [view, setView] = useState<"write" | "board">(() => load(`view:${projectId}`, "write"));
+  const [view, setView] = useState<"write" | "board" | "review">(() => load(`view:${projectId}`, "write"));
+  const [previewTab, setPreviewTab] = useState<"pdf" | "assistant" | "citations">(() => load("previewTab", "pdf"));
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const [assistantRequest, setAssistantRequest] = useState<{ text: string; key: number }>();
 
   const collab = useCollab(projectId, session);
   const peers = usePeers(collab);
@@ -56,7 +65,15 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const { doc: reviewDoc, threads } = useThreads(collab, textPath);
   const openThreads = threads.filter((t) => t.status === "open").length;
   useEffect(() => save("review", reviewOpen), [reviewOpen]);
-  useEffect(() => { setDraft(null); setActiveThread(null); }, [textPath]);
+  useEffect(() => save("previewTab", previewTab), [previewTab]);
+  useEffect(() => { api.aiSettings().then(setAiSettings).catch(() => {}); }, []);
+  const agentsMap = useYMap(collab?.agents);
+  const agentPeers = useMemo<Peer[]>(() => [...agentsMap.values()].map((a, i) => ({
+    clientId: -1 - i, user: { name: `Claude for ${a.for}`, color: "#d97757", agent: true }, file: a.file ?? null, view: "write" as const,
+  })), [agentsMap]);
+  // Switching files clears the draft and selection, unless we're jumping to a specific thread.
+  const pendingThread = useRef<string | null>(null);
+  useEffect(() => { setDraft(null); setActiveThread(pendingThread.current); pendingThread.current = null; }, [textPath]);
 
   const editor = useRef<EditorHandle>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
@@ -138,7 +155,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         setProject(p);
         setFiles(f);
         const last = load<string | null>(`open:${projectId}`, null);
-        const startView = load<"write" | "board">(`view:${projectId}`, "write");
+        const startView = load<"write" | "board" | "review">(`view:${projectId}`, "write");
         openFile(last && f.some((x) => x.path === last) ? last : p.mainFile);
         setView(startView);
         compile();
@@ -282,9 +299,24 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   const peersByFile = useMemo(() => {
     const m = new Map<string, Peer[]>();
-    peers.forEach((p) => { if (p.file && p.view !== "board") m.set(p.file, [...(m.get(p.file) ?? []), p]); });
+    [...peers, ...agentPeers].forEach((p) => { if (p.file && p.view !== "board") m.set(p.file, [...(m.get(p.file) ?? []), p]); });
     return m;
-  }, [peers]);
+  }, [peers, agentPeers]);
+
+  const askClaude = (text: string) => {
+    setView("write");
+    setPreviewTab("assistant");
+    setAssistantRequest({ text, key: Date.now() });
+  };
+
+  const openSuggestion = (path: string, threadId?: string) => {
+    if (threadId) {
+      setReviewOpen(true);
+      if (path === textPath) setActiveThread(threadId);
+      else pendingThread.current = threadId;
+    }
+    openFile(path);
+  };
 
   const startComment = (kind: Draft["kind"] = "comment") => {
     const sel = editor.current?.selection();
@@ -332,6 +364,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     const cmds: Command[] = [
       { id: "compile", label: "Compile", section: "Action", icon: "play", hint: `${MOD}S`, run: compile },
       { id: "checkpoint", label: "Create checkpoint…", section: "Action", icon: "history", run: () => setHistoryOpen(true) },
+      { id: "ai-review", label: "AI review of the paper", section: "AI", icon: "star", run: () => setView("review") },
+      { id: "assistant", label: "Ask Claude…", section: "AI", icon: "comment", run: () => { setView("write"); setPreviewTab("assistant"); } },
+      { id: "citations", label: "Check citations", section: "AI", icon: "book", run: () => { setView("write"); setPreviewTab("citations"); } },
+      { id: "ai-settings", label: "AI settings (API key)…", section: "AI", icon: "key", run: () => setAiSettingsOpen(true) },
       { id: "board", label: view === "board" ? "Back to writing" : "Open board", section: "View", icon: "board", hint: `${MOD}⇧B`, run: () => setView((v) => (v === "board" ? "write" : "board")) },
       { id: "comment", label: "Comment on selection", section: "Review", icon: "comment", hint: `${MOD}⌥M`, run: () => startComment("comment") },
       { id: "suggest", label: "Suggest an edit to selection", section: "Review", icon: "comment", run: () => startComment("suggestion") },
@@ -381,9 +417,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         <div className="segmented">
           <button className={view === "write" ? "active" : ""} onClick={() => setView("write")}>Write</button>
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")} title={`Board (${MOD}⇧B)`}>Board</button>
+          <button className={view === "review" ? "active" : ""} onClick={() => setView("review")} title="AI review">Review</button>
         </div>
         <div className="spacer" />
-        <PresenceStrip peers={peers} onFollow={follow} />
+        <PresenceStrip peers={[...peers, ...agentPeers]} onFollow={follow} />
         {result && (
           <button className={`chip ${errors ? "danger" : warnings ? "warn" : ""}`} onClick={() => setShowProblems((s) => !s)} title="Problems">
             {errors ? <><Icon name="alert" size={13} />{errors} error{errors > 1 ? "s" : ""}</> :
@@ -404,7 +441,11 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       {view === "board" && (
         <Board collab={collab} session={session} files={files} peers={peers} onOpenFile={(p) => openFile(p)} />
       )}
-      <div className="body" hidden={view === "board"}>
+      {view === "review" && (
+        <ReviewView project={project} settings={aiSettings} onProjectChange={setProject} onOpenSettings={() => setAiSettingsOpen(true)}
+          onOpen={(p, line) => openFile(p, line)} notify={notify} />
+      )}
+      <div className="body" hidden={view !== "write"}>
         {sidebar && (
           <aside className="sidebar">
             <div className="sidebar-head">
@@ -485,18 +526,37 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                 />
               )}
             </div>
-            {showProblems && result && <Problems result={result} onOpen={openDiagnostic} onClose={() => setShowProblems(false)} />}
+            {showProblems && result && (
+              <Problems result={result} onOpen={openDiagnostic} onClose={() => setShowProblems(false)}
+                onFix={(d) => askClaude(`Fix this LaTeX compile error: "${d.message}"${d.file ? ` at ${d.file}${d.line ? `:${d.line}` : ""}` : ""}. Read the surrounding lines, suggest a fix, and compile to check it.`)} />
+            )}
           </section>
 
           <div className="splitter" onPointerDown={startDrag} />
 
           <section className="pane preview" style={{ flexBasis: `${(1 - split) * 100}%` }}>
-            <PdfViewer
-              url={pdfVersion ? api.pdfUrl(projectId, pdfVersion) : null}
-              highlight={highlight}
-              onInverse={(pg, x, y) => void inverseSync(pg, x, y)}
-              emptyMessage={compiling ? "Compiling…" : errors ? "Fix the errors to see a PDF" : "Compile to see your paper"}
-            />
+            <div className="preview-tabs">
+              <button className={previewTab === "pdf" ? "active" : ""} onClick={() => setPreviewTab("pdf")}>PDF</button>
+              <button className={previewTab === "assistant" ? "active" : ""} onClick={() => setPreviewTab("assistant")}>✦ Assistant{agentPeers.length ? <span className="live-dot" /> : null}</button>
+              <button className={previewTab === "citations" ? "active" : ""} onClick={() => setPreviewTab("citations")}>Citations</button>
+            </div>
+            <div className="preview-body" hidden={previewTab !== "pdf"}>
+              <PdfViewer
+                url={pdfVersion ? api.pdfUrl(projectId, pdfVersion) : null}
+                highlight={highlight}
+                onInverse={(pg, x, y) => void inverseSync(pg, x, y)}
+                emptyMessage={compiling ? "Compiling…" : errors ? "Fix the errors to see a PDF" : "Compile to see your paper"}
+              />
+            </div>
+            <div className="preview-body" hidden={previewTab !== "assistant"}>
+              <AssistantPanel projectId={projectId} session={session} settings={aiSettings} request={assistantRequest}
+                onOpenSettings={() => setAiSettingsOpen(true)} onOpenSuggestion={openSuggestion} />
+            </div>
+            {previewTab === "citations" && (
+              <div className="preview-body">
+                <CitationsPanel projectId={projectId} onOpen={(p, line) => openFile(p, line)} notify={notify} />
+              </div>
+            )}
           </section>
         </div>
       </div>
@@ -514,6 +574,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       />
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       {historyOpen && <HistoryPanel projectId={projectId} onClose={() => setHistoryOpen(false)} beforeCheckpoint={() => collab.flush()} />}
+      {aiSettingsOpen && <AiSettingsDialog settings={aiSettings} onChange={setAiSettings} onClose={() => setAiSettingsOpen(false)} />}
       {localOpen && <LocalDialog projectId={projectId} session={session} onClose={() => setLocalOpen(false)} />}
       {prompt && <PromptDialog req={prompt} onDone={() => setPrompt(null)} />}
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}

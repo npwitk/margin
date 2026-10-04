@@ -8,6 +8,7 @@ import type { Server } from "node:http";
 import { authRoutes, requireSession, type AppEnv } from "./auth.ts";
 import { attachCollab, shutdownCollab } from "./collab.ts";
 import { DATA_DIR, GITHUB, OPEN_ACCESS, PASSWORD, WEB_DIST } from "./config.ts";
+import { aiProjectRoutes, aiSettingsRoutes } from "./ai/routes.ts";
 import { handleGit } from "./gitHttp.ts";
 import { projectRoutes, tokenRoutes } from "./routes.ts";
 
@@ -17,7 +18,10 @@ app.use("*", logger());
 app.get("/api/health", (c) => c.json({ ok: true }));
 app.route("/api", authRoutes);
 app.use("/api/projects/*", requireSession);
+app.route("/api/projects", aiProjectRoutes);
 app.route("/api/projects", projectRoutes);
+app.use("/api/ai/*", requireSession);
+app.route("/api/ai", aiSettingsRoutes);
 app.use("/api/tokens/*", requireSession);
 app.use("/api/tokens", requireSession);
 app.route("/api/tokens", tokenRoutes);

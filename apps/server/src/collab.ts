@@ -6,7 +6,7 @@ import { Hocuspocus, type Document } from "@hocuspocus/server";
 import { parseSigned } from "hono/utils/cookie";
 import { WebSocketServer } from "ws";
 import * as Y from "yjs";
-import { ROOM, diffRegion, docName, isTextPath, parseDocName, type RoomEvents, type Session, type Task } from "@margin/shared";
+import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type RoomEvents, type Session, type Task } from "@margin/shared";
 import { DATA_DIR, SECRET } from "./config.ts";
 import { HttpError, projectDir, resolvePath } from "./storage.ts";
 
@@ -219,6 +219,17 @@ export async function releasePath(projectId: string, rel: string) {
   }
   await rm(path.join(YSTATE_DIR, projectId, `${rel}.yjs`), { force: true });
   await rm(path.join(YSTATE_DIR, projectId, rel), { recursive: true, force: true });
+}
+
+/** Show (or clear) what an AI agent is doing, next to human presence. */
+export function setAgentActivity(projectId: string, chatId: string, activity: AgentActivity | null) {
+  const room = hocuspocus.documents.get(docName(projectId, ROOM)) as Document | undefined;
+  if (!room) return;
+  room.transact(() => {
+    const agents = room.getMap<AgentActivity>("agents");
+    if (activity) agents.set(chatId, activity);
+    else agents.delete(chatId);
+  });
 }
 
 /** Push a live event to everyone in the project (no-op when nobody is connected). */

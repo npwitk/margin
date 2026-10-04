@@ -1,7 +1,7 @@
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/provider";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import * as Y from "yjs";
-import { ROOM, colorFor, docName, type PresenceState, type RoomEvents, type Session, type Task } from "@margin/shared";
+import { ROOM, colorFor, docName, type AgentActivity, type PresenceState, type RoomEvents, type Session, type Task } from "@margin/shared";
 
 export interface Peer extends PresenceState {
   clientId: number;
@@ -99,6 +99,7 @@ export class ProjectCollab {
 
   get tasks() { return this.room.document.getMap<Task>("tasks"); }
   get members() { return this.room.document.getMap<{ color: string; lastSeen: string }>("members"); }
+  get agents() { return this.room.document.getMap<AgentActivity>("agents"); }
   get events() { return this.room.document.getMap<RoomEvents[keyof RoomEvents]>("events"); }
 
   destroy() {

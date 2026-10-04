@@ -77,9 +77,10 @@ export async function createProject(name: string, template: string, author: stri
   return project;
 }
 
-export async function updateProject(id: string, patch: Partial<Pick<Project, "name" | "mainFile" | "engine">>): Promise<Project> {
+export async function updateProject(id: string, patch: Partial<Pick<Project, "name" | "mainFile" | "engine" | "goal">>): Promise<Project> {
   const p = await getProject(id);
   if (patch.name !== undefined) p.name = patch.name.trim().slice(0, 120) || p.name;
+  if (patch.goal !== undefined) p.goal = patch.goal.trim().slice(0, 500) || undefined;
   if (patch.mainFile !== undefined) {
     if (!patch.mainFile.endsWith(".tex")) throw new HttpError(400, "Main file must be a .tex file");
     await stat(resolvePath(id, patch.mainFile)).catch(() => { throw new HttpError(400, "Main file does not exist"); });

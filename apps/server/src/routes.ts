@@ -9,7 +9,7 @@ import {
   type CompileResult, type ThreadKind, type ThreadStatus,
 } from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
-import { COMPILE_TOKEN, COMPILE_URL } from "./config.ts";
+import { compileProject, compileWorker } from "./compile.ts";
 import { emit, flushProject, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
 import { checkpoint, history, withGitLock } from "./git.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
@@ -22,17 +22,6 @@ const MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", svg: "image/svg+xml",
   webp: "image/webp", pdf: "application/pdf", txt: "text/plain; charset=utf-8",
 };
-
-async function compileWorker(pathAndQuery: string, init?: RequestInit) {
-  const res = await fetch(`${COMPILE_URL}${pathAndQuery}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(COMPILE_TOKEN ? { "x-compile-token": COMPILE_TOKEN } : {}) },
-  }).catch(() => null);
-  if (!res) throw new Error("Compile service is not reachable");
-  const body = await res.json();
-  if (!res.ok) throw new Error(body.error ?? `Compile service error ${res.status}`);
-  return body;
-}
 
 /** A text file as collaborators currently see it (live document first, then disk). */
 async function currentText(id: string, rel: string) {
@@ -158,19 +147,7 @@ export const projectRoutes = new Hono<AppEnv>()
   })
 
   // ── Compile & preview ────────────────────────────────────────────────────
-  .post("/:id/compile", async (c) => {
-    const id = c.req.param("id");
-    const project = await getProject(id);
-    await flushProject(id);
-    await syncWorkDir(id);
-    const result = (await compileWorker("/compile", {
-      method: "POST",
-      body: JSON.stringify({ projectId: id, mainFile: project.mainFile, engine: project.engine }),
-    })) as CompileResult;
-    await touchProject(id);
-    emit(id, "lastCompile", { by: c.get("session").name, at: Date.now(), ok: result.ok });
-    return c.json(result);
-  })
+  .post("/:id/compile", async (c) => c.json(await compileProject(c.req.param("id"), c.get("session").name)))
 
   .get("/:id/output.pdf", async (c) => {
     const id = c.req.param("id");

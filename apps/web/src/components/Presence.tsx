@@ -1,10 +1,10 @@
 import { colorFor } from "@margin/shared";
 import type { Peer } from "../lib/collab.ts";
 
-export function Avatar({ name, size, online, title, src }: { name: string; size?: "sm" | "xs"; online?: boolean; title?: string; src?: string }) {
+export function Avatar({ name, size, online, title, src, agent }: { name: string; size?: "sm" | "xs"; online?: boolean; title?: string; src?: string; agent?: boolean }) {
   return (
-    <span className={`avatar ${size ?? ""} ${online ? "online" : ""}`} style={{ background: colorFor(name) }} title={title ?? name}>
-      {src ? <img src={src} alt="" /> : name.slice(0, 1).toUpperCase()}
+    <span className={`avatar ${size ?? ""} ${online ? "online" : ""} ${agent ? "agent" : ""}`} style={agent ? undefined : { background: colorFor(name) }} title={title ?? name}>
+      {agent ? "✦" : src ? <img src={src} alt="" /> : name.slice(0, 1).toUpperCase()}
     </span>
   );
 }
@@ -18,8 +18,8 @@ export function PresenceStrip({ peers, onFollow }: { peers: Peer[]; onFollow(pee
     <div className="presence">
       {unique.slice(0, 6).map((p) => (
         <button key={p.clientId} className="presence-btn" onClick={() => onFollow(p)}
-          title={`${p.user.name} · ${p.view === "board" ? "on the board" : p.file ? `${p.file}${p.line ? `:${p.line}` : ""}` : "browsing"} — click to follow`}>
-          <Avatar name={p.user.name} src={p.user.avatar} online />
+          title={p.user.agent ? `${p.user.name} · ${p.file ?? "working"}` : `${p.user.name} · ${p.view === "board" ? "on the board" : p.file ? `${p.file}${p.line ? `:${p.line}` : ""}` : "browsing"} — click to follow`}>
+          <Avatar name={p.user.name} src={p.user.avatar} agent={p.user.agent} online={!p.user.agent} />
         </button>
       ))}
       {unique.length > 6 && <span className="muted small">+{unique.length - 6}</span>}

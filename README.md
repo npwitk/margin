@@ -2,7 +2,7 @@
 
 An open-source, AI-native LaTeX workspace for research groups. Write, compile and review papers together. Agents like Claude Code and Codex work alongside you as visible teammates.
 
-> Working name. Status: **P1 complete**. Next up: P2 (AI).
+> Working name. Status: **P2 complete** (AI). Next up: P3 (external agents via MCP).
 
 ## What works today (P0)
 - Projects stored as **git repos** you own; checkpoints are commits credited to each member
@@ -33,6 +33,15 @@ POST /api/projects/:id/review/:thread   {path, action: "reply"|"accept"|"resolve
 ```
 
 Collab runs inside the API server (Hocuspocus over `/api/collab`). Files on disk stay the source of truth for compile and git. CRDT state is cached in `DATA_DIR/ystate`, so reconnecting clients merge instead of duplicating text.
+
+## AI (P2)
+Claude (`claude-opus-5-5`) is built in. Bring your own key: each member adds their Anthropic API key in **AI settings**, stored encrypted on the server. A workspace can also set a shared `ANTHROPIC_API_KEY`.
+- **Assistant** (preview pane → ✦ Assistant): chats shared with the project. Claude reads and searches files, compiles, checks the board and searches the web for literature. It **never edits directly**: changes arrive as suggestions and comments in the Review panel, and teammates see "Claude for <name>" working live.
+- **Fix with Claude:** a button on every compile error.
+- **AI review** (Review view): set your publishing goal, pick a rubric from `skills/*.md`, and get a 1–10 readiness score per criterion with concrete issues pinned to the exact text. One click turns an issue into a comment. Rubrics are plain Markdown, so add your venue's.
+- **Citation checker** (preview pane → Citations): every `.bib` entry is checked against Crossref and OpenAlex. Made-up, mismatched or wrong-DOI references and `\cite` keys missing from the `.bib` are flagged. **Add by DOI** appends clean BibTeX.
+
+Refusals fall back automatically (`fallbacks: "default"`); the agent's history is append-only and prompt-cached.
 
 ## Run locally
 Requires Node 22+, git, and a TeX distribution with `latexmk` and `synctex` (e.g. MacTeX).
@@ -70,7 +79,7 @@ Before public sign-ups: per-job containers (or gVisor/Firecracker) so projects c
 
 ## Roadmap
 - **P1, collaboration:** ✓ live editing, presence, board, comments and suggestions, git remote, GitHub sign-in
-- **P2, AI:** a built-in agent with tools (bring your own key), compile-error fixer, goal-based reviewer skills (`skills/*.md`), citation checker (Crossref/OpenAlex), reference library
+- **P2, AI:** ✓ assistant with tools, compile-error fixer, reviewer skills, citation checker, add by DOI · later: PDF reference library (GROBID), chat with your papers
 - **P3, external agents:** a `margin-mcp` server so Claude Code and Codex claim board tasks and edit live as "Claude for <member>"
 - **P4:** idea → paper workflow, Overleaf/arXiv import, public launch, Tauri desktop app
 

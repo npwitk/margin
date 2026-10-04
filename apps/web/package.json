@@ -20,6 +20,8 @@
     "@lezer/highlight": "^1.2.0",
     "@margin/shared": "*",
     "codemirror": "^6.0.1",
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14",
     "pdfjs-dist": "^5.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
