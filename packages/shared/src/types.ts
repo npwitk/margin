@@ -137,6 +137,11 @@ export const TASK_COLUMNS: { id: TaskStatus; label: string }[] = [
   { id: "done", label: "Done" },
 ];
 
+/** Everyone assigned to a task (older tasks only have `assignee`). */
+export const assigneesOf = (t: Pick<Task, "assignee" | "assignees">): string[] => t.assignees?.length ? t.assignees : t.assignee ? [t.assignee] : [];
+/** Patch that sets the assignee list and keeps `assignee` in step. */
+export const withAssignees = (names: string[]): Pick<Task, "assignee" | "assignees"> => ({ assignees: names, assignee: names[0] });
+
 export type TaskPriority = "highest" | "high" | "medium" | "low" | "lowest";
 export const TASK_PRIORITIES: { id: TaskPriority; label: string }[] = [
   { id: "highest", label: "Highest" }, { id: "high", label: "High" }, { id: "medium", label: "Medium" }, { id: "low", label: "Low" }, { id: "lowest", label: "Lowest" },
@@ -147,8 +152,10 @@ export interface Task {
   id: string;
   title: string;
   status: TaskStatus;
-  /** Member name (later: agent ids like "claude:alice"). */
+  /** First assignee, kept for older clients and agents; same as assignees[0]. */
   assignee?: string;
+  /** Everyone working on it. */
+  assignees?: string[];
   /** Files this task touches, e.g. ["sections/method.tex"]. */
   files?: string[];
   notes?: string;

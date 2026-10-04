@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { TASK_COLUMNS, TASK_PRIORITIES, type FileEntry, type Session, type Task, type TaskPriority, type TaskStatus } from "@margin/shared";
+import { TASK_COLUMNS, TASK_PRIORITIES, assigneesOf, withAssignees, type FileEntry, type Session, type Task, type TaskPriority, type TaskStatus } from "@margin/shared";
 import { rememberAvatars } from "../lib/avatars.ts";
 import { useYMap, type Peer, type ProjectCollab } from "../lib/collab.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Modal } from "./Dialog.tsx";
 import { Avatar } from "./Presence.tsx";
 import { Icon } from "./Icon.tsx";
+import { MarkdownField } from "./MarkdownField.tsx";
 
 interface Props {
   collab: ProjectCollab;
@@ -72,10 +73,10 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
   }, [tasksMap]);
   const keyOf = (t: Task) => `${prefix}-${numbers.get(t.id) ?? "?"}`;
 
-  const tasks = useMemo(() => [...tasksMap.values()].filter((t) => !mine || t.assignee === session.name), [tasksMap, mine, session.name]);
+  const tasks = useMemo(() => [...tasksMap.values()].filter((t) => !mine || assigneesOf(t).includes(session.name)), [tasksMap, mine, session.name]);
   const members = useMemo(() => {
     const names = new Set([session.name, ...membersMap.keys(), ...peers.filter((p) => !p.user.agent).map((p) => p.user.name)]);
-    [...tasksMap.values()].forEach((t) => t.assignee && names.add(t.assignee));
+    [...tasksMap.values()].forEach((t) => assigneesOf(t).forEach((a) => names.add(a)));
     return [...names].sort();
   }, [membersMap, peers, tasksMap, session.name]);
   const allLabels = useMemo(() => [...new Set([...tasksMap.values()].flatMap((t) => t.labels ?? []))].sort(), [tasksMap]);
@@ -109,14 +110,14 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
 
   // Where each member is right now, for the team strip.
   const liveFile = (name: string) => peers.find((p) => p.user.name === name)?.file;
-  const isLive = (t: Task) => !!t.assignee && (t.files ?? []).some((f) => peers.some((p) => p.user.name === t.assignee && p.file === f));
+  const liveAssignee = (t: Task) => assigneesOf(t).find((a) => (t.files ?? []).some((f) => peers.some((p) => p.user.name === a && p.file === f)));
   const editingTask = editing ? tasksMap.get(editing) : undefined;
 
   return (
     <div className="board">
       <div className="team">
         {members.map((name) => {
-          const doing = [...tasksMap.values()].filter((t) => t.assignee === name && (t.status === "doing" || t.status === "review"));
+          const doing = [...tasksMap.values()].filter((t) => assigneesOf(t).includes(name) && (t.status === "doing" || t.status === "review"));
           const here = name === session.name || peers.some((p) => p.user.name === name);
           const file = name === session.name ? null : liveFile(name);
           return (
@@ -194,9 +195,9 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
                         {t.due && <span className={`due ${overdue ? "overdue" : ""}`} title={overdue ? "Overdue" : "Due"}><Icon name="calendar" size={11} />{new Date(`${t.due}T00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
                         {!!t.notes?.trim() && <span className="muted" title="Has a description"><Icon name="comment" size={12} /></span>}
                         <div className="spacer" />
-                        {isLive(t) && <span className="live" title={`${t.assignee} is in this file now`}>live</span>}
-                        {t.assignee
-                          ? <Avatar name={t.assignee} size="sm" title={`Assignee: ${t.assignee}`} />
+                        {liveAssignee(t) && <span className="live" title={`${liveAssignee(t)} is in this file now`}>live</span>}
+                        {assigneesOf(t).length
+                          ? <span className="avatar-stack" title={`Assignees: ${assigneesOf(t).join(", ")}`}>{assigneesOf(t).slice(0, 3).map((a) => <Avatar key={a} name={a} size="sm" title={a} />)}{assigneesOf(t).length > 3 && <span className="avatar sm more">+{assigneesOf(t).length - 3}</span>}</span>
                           : <span className="avatar sm unassigned" title="Unassigned"><Icon name="plus" size={10} /></span>}
                       </div>
                     </article>
@@ -249,7 +250,6 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
   onClose(): void;
 }) {
   const [title, setTitle] = useState(task.title);
-  const [notes, setNotes] = useState(task.notes ?? "");
   const [label, setLabel] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const linked = task.files ?? [];
@@ -258,7 +258,6 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
   const commit = () => {
     const patch: Partial<Task> = {};
     if ((title.trim() || task.title) !== task.title) patch.title = title.trim() || task.title;
-    if (notes !== (task.notes ?? "")) patch.notes = notes;
     if (Object.keys(patch).length) onChange(patch);
   };
   const close = () => { commit(); onClose(); };
@@ -282,7 +281,8 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); } }} />
 
           <div className="task-section-label">Description</div>
-          <textarea className="notes task-desc" placeholder="Add a description: what to write, acceptance criteria, links…" value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={commit} />
+          <MarkdownField key={task.id} value={task.notes ?? ""} onSave={(v) => v !== (task.notes ?? "") && onChange({ notes: v })}
+            placeholder="Add a description: what to write, acceptance criteria, links…" />
 
           <div className="task-section-label">Linked files</div>
           <div className="task-files">
@@ -307,15 +307,9 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
 
           <div className="task-details">
             <div className="task-details-head">Details</div>
-            <div className="detail-row">
-              <span className="detail-label">Assignee</span>
-              <div className="detail-value">
-                {task.assignee ? <Avatar name={task.assignee} size="sm" /> : <span className="avatar sm unassigned"><Icon name="plus" size={10} /></span>}
-                <select className="bare-select" value={task.assignee ?? ""} onChange={(e) => onChange({ assignee: e.target.value || undefined })}>
-                  <option value="">Unassigned</option>
-                  {members.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
+            <div className="detail-row top">
+              <span className="detail-label">Assignees</span>
+              <AssigneePicker value={assigneesOf(task)} members={members} onChange={(names) => onChange(withAssignees(names))} />
             </div>
             <div className="detail-row">
               <span className="detail-label">Priority</span>
@@ -362,5 +356,35 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
         </aside>
       </div>
     </Modal>
+  );
+}
+
+/** Several people can own a task; click to add or remove. */
+function AssigneePicker({ value, members, onChange }: { value: string[]; members: string[]; onChange(names: string[]): void }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!(e.target as HTMLElement).closest(".assignee-picker")) setOpen(false); };
+    // Capture phase: the dialog stops mousedown from bubbling.
+    window.addEventListener("mousedown", close, true);
+    return () => window.removeEventListener("mousedown", close, true);
+  }, [open]);
+  const toggle = (m: string) => onChange(value.includes(m) ? value.filter((x) => x !== m) : [...value, m]);
+  return (
+    <div className="detail-value wrap assignee-picker">
+      {value.map((a) => (
+        <span key={a} className="assignee-chip"><Avatar name={a} size="xs" />{a}<button onClick={() => toggle(a)} title={`Remove ${a}`}><Icon name="x" size={10} /></button></span>
+      ))}
+      <button className="bare-select add-assignee" onClick={() => setOpen((o) => !o)}>{value.length ? "+ Add" : "Unassigned · add"}</button>
+      {open && (
+        <div className="assignee-menu" role="listbox">
+          {members.map((m) => (
+            <button key={m} role="option" aria-selected={value.includes(m)} className={value.includes(m) ? "on" : ""} onClick={() => toggle(m)}>
+              <Avatar name={m} size="xs" /><span className="grow">{m}</span>{value.includes(m) && <Icon name="check" size={13} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

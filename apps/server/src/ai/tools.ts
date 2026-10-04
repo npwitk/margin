@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { ROOM, TASK_COLUMNS, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
+import { ROOM, TASK_COLUMNS, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
 import { withDoc } from "../collab.ts";
 import { compileProject } from "../compile.ts";
 import { getProject, listFiles, resolvePath } from "../storage.ts";
@@ -179,7 +179,7 @@ const DEFS: Record<string, Def> = {
       const tasks = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => [...doc.getMap<Task>("tasks").values()]);
       const content = TASK_COLUMNS.map((c) => {
         const items = tasks.filter((t) => t.status === c.id).sort((a, b) => a.order - b.order);
-        return `${c.label}:\n${items.map((t) => `- [${t.id.slice(0, 8)}] ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}${t.files?.length ? ` files: ${t.files.join(", ")}` : ""}`).join("\n") || "- (none)"}`;
+        return `${c.label}:\n${items.map((t) => `- [${t.id.slice(0, 8)}] ${t.title}${assigneesOf(t).length ? ` (${assigneesOf(t).map((a) => `@${a}`).join(", ")})` : ""}${t.files?.length ? ` files: ${t.files.join(", ")}` : ""}`).join("\n") || "- (none)"}`;
       }).join("\n\n");
       return { summary: "Checked the board", content };
     },
@@ -200,7 +200,7 @@ const DEFS: Record<string, Def> = {
         const now = new Date().toISOString();
         const t: Task = {
           id: crypto.randomUUID(), title: input.title.slice(0, 200), status: "todo", order,
-          assignee: input.assignee, files: input.files?.filter((f) => isTextPath(f) || f.includes(".")), notes: input.notes,
+          ...(input.assignee ? withAssignees([input.assignee]) : {}), files: input.files?.filter((f) => isTextPath(f) || f.includes(".")), notes: input.notes,
           createdBy: `${ctx.agentName} (for ${ctx.session.name})`, createdAt: now, updatedAt: now,
         };
         tasks.set(t.id, t);
@@ -215,7 +215,7 @@ const DEFS: Record<string, Def> = {
     schema: z.object({
       id: z.string(),
       status: z.enum(["todo", "doing", "review", "done"]).optional(),
-      assignee: z.string().optional().describe("Member name; use your user's name to claim it"),
+      assignee: z.string().optional().describe("Member name to add as an assignee; use your user's name to claim it"),
       note: z.string().optional().describe("Appended to the task's notes"),
     }),
     async run(input: { id: string; status?: Task["status"]; assignee?: string; note?: string }, ctx) {
@@ -226,13 +226,14 @@ const DEFS: Record<string, Def> = {
         const t = matches[0];
         const stamp = new Date().toISOString();
         const notes = input.note ? `${t.notes ? `${t.notes}\n\n` : ""}${input.note.trim()} (${ctx.agentName} for ${ctx.session.name}, ${stamp.slice(0, 10)})` : t.notes;
-        const next: Task = { ...t, status: input.status ?? t.status, assignee: input.assignee ?? t.assignee, notes, updatedAt: stamp };
+        const people = assigneesOf(t);
+        const next: Task = { ...t, status: input.status ?? t.status, ...(input.assignee && !people.includes(input.assignee) ? withAssignees([...people, input.assignee]) : {}), notes, updatedAt: stamp };
         tasks.set(t.id, next);
         return { task: next };
       });
       if (!result.task) return fail("Couldn't update the task", result.error!);
       const col = TASK_COLUMNS.find((c) => c.id === result.task.status)?.label;
-      return { summary: `Updated task “${result.task.title}” (${col}${result.task.assignee ? `, @${result.task.assignee}` : ""})`, content: "Task updated." };
+      return { summary: `Updated task “${result.task.title}” (${col}${assigneesOf(result.task).length ? `, ${assigneesOf(result.task).map((a) => `@${a}`).join(" ")}` : ""})`, content: "Task updated." };
     },
   },
 

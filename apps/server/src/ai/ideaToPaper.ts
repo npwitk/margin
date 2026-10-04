@@ -3,7 +3,7 @@ import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
-import { ROOM, parseBibtex, plainTex, type Project, type Session, type Task } from "@margin/shared";
+import { ROOM, parseBibtex, plainTex, withAssignees, type Project, type Session, type Task } from "@margin/shared";
 import { emit, releasePath, withDoc, writeThroughCollab } from "../collab.ts";
 import { checkpoint, withGitLock } from "../git.ts";
 import { createProject, getProject, projectDir, saveProject } from "../storage.ts";
@@ -249,7 +249,7 @@ ${idea}
           const assignee = members.find((m) => m.toLowerCase() === t.assignee.trim().toLowerCase());
           const task: Task = {
             id: crypto.randomUUID(), title: t.title.slice(0, 200), status: "todo", order: i + 1,
-            assignee, files: sectionIndex >= 0 ? [`sections/${files[sectionIndex]}.tex`] : undefined,
+            ...(assignee ? withAssignees([assignee]) : {}), files: sectionIndex >= 0 ? [`sections/${files[sectionIndex]}.tex`] : undefined,
             notes: t.notes || undefined, createdBy: `Claude (for ${session.name})`, createdAt: now, updatedAt: now,
           };
           tasks.set(task.id, task);

@@ -3,6 +3,7 @@ import { GlobalWorkerOptions, TextLayer, getDocument, type PDFDocumentProxy } fr
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { SyncTexForward } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
+import { bindTextLayer } from "../lib/pdfSelection.ts";
 
 GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -10,13 +11,15 @@ interface Props {
   url: string | null;
   /** Where to scroll and flash after a forward search. */
   highlight?: SyncTexForward & { key: number };
-  /** Double-click → source location. Coordinates are PDF points from the page's top-left. */
+  /** ⌘/Ctrl-click → source location. Coordinates are PDF points from the page's top-left. */
   onInverse?(page: number, x: number, y: number): void;
   emptyMessage?: string;
 }
 
 type Zoom = "fit" | number;
-const ZOOM_STEPS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const ZOOM_STEPS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
+const MIN_ZOOM = 0.25, MAX_ZOOM = 5;
+const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
 export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -27,6 +30,10 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
   const [scale, setScale] = useState(1);
   const renderToken = useRef(0);
   const scaleRef = useRef(1);
+  /** Scale the pages are shown at right now (ahead of scaleRef while a pinch is in progress). */
+  const liveScale = useRef(1);
+  const settle = useRef(0);
+  const hovering = useRef(false);
 
   // Load (or reload) the document. Keep showing the old one until the new one is ready.
   useEffect(() => {
@@ -61,6 +68,8 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
       const wrap = document.createElement("div");
       wrap.className = "pdf-page";
       wrap.dataset.page = String(n);
+      wrap.dataset.w = String(vp.width / s);
+      wrap.dataset.h = String(vp.height / s);
       wrap.style.width = `${vp.width}px`;
       wrap.style.height = `${vp.height}px`;
       const canvas = document.createElement("canvas");
@@ -76,7 +85,8 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
       fragment.appendChild(wrap);
       jobs.push(async () => {
         await page.render({ canvas, viewport: page.getViewport({ scale: s * dpr }) }).promise;
-        await new TextLayer({ textContentSource: page.streamTextContent(), container: text, viewport: vp }).render().catch(() => {});
+        await new TextLayer({ textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }), container: text, viewport: vp }).render().catch(() => {});
+        bindTextLayer(text);
       });
     }
     // Render off-screen first so recompiles don't flash a blank pane.
@@ -89,6 +99,7 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
     container.replaceChildren(fragment);
     scroll.scrollTop = ratio * scroll.scrollHeight;
     scaleRef.current = s;
+    liveScale.current = s;
     setScale(s);
   }, [doc, zoom]);
 
@@ -130,18 +141,99 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
     return () => { window.clearTimeout(t); mark.remove(); };
   }, [highlight]);
 
-  const onDoubleClick = (e: React.MouseEvent) => {
+  /**
+   * Zoom the pages to `next` right away by resizing them (the canvases stretch
+   * until the sharp re-render lands), keeping the point under the pointer still.
+   */
+  const zoomAt = useCallback((next: number, cx?: number, cy?: number) => {
+    const scroll = scroller.current, container = pagesEl.current;
+    if (!scroll || !container || !doc) return;
+    next = clampZoom(next);
+    if (Math.abs(next / liveScale.current - 1) < 0.001) return;
+    // Pin the point under the pointer: remember where it sits on its page, resize, then scroll it back.
+    const box = scroll.getBoundingClientRect();
+    const px = box.left + (cx ?? scroll.clientWidth / 2), py = box.top + (cy ?? scroll.clientHeight / 2);
+    const pages = [...container.querySelectorAll<HTMLDivElement>(".pdf-page")];
+    const target = pages.find((w) => { const r = w.getBoundingClientRect(); return py >= r.top - 6 && py <= r.bottom + 6; }) ?? pages[0];
+    const before = target?.getBoundingClientRect();
+    const fx = before ? (px - before.left) / before.width : 0, fy = before ? (py - before.top) / before.height : 0;
+    for (const wrap of pages) {
+      wrap.style.width = `${Number(wrap.dataset.w) * next}px`;
+      wrap.style.height = `${Number(wrap.dataset.h) * next}px`;
+      wrap.style.setProperty("--scale-factor", String(next));
+      wrap.style.setProperty("--total-scale-factor", String(next));
+    }
+    liveScale.current = next;
+    if (target) {
+      const after = target.getBoundingClientRect();
+      scroll.scrollLeft += after.left + fx * after.width - px;
+      scroll.scrollTop += after.top + fy * after.height - py;
+    }
+    window.clearTimeout(settle.current);
+    settle.current = window.setTimeout(() => setZoom(next), 160);
+  }, [doc]);
+
+  // Pinch / ⌘-scroll zooms the PDF, never the whole page. Safari sends gesture events instead of ctrl+wheel.
+  useEffect(() => {
+    const scroll = scroller.current;
+    if (!scroll) return;
+    const local = (e: { clientX: number; clientY: number }) => {
+      const r = scroll.getBoundingClientRect();
+      return [e.clientX - r.left, e.clientY - r.top] as const;
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      if (!scroll.contains(e.target as Node)) return;
+      // Trackpad pinches send many small deltas; a mouse wheel notch is ~100. Cap each event so both feel smooth.
+      const delta = Math.max(-30, Math.min(30, e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY));
+      zoomAt(liveScale.current * Math.exp(-delta * 0.0075), ...local(e));
+    };
+    let gestureStart = 1;
+    const onGestureStart = (e: Event) => { e.preventDefault(); gestureStart = liveScale.current; };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const g = e as Event & { scale: number; clientX: number; clientY: number };
+      if (scroll.contains(e.target as Node)) zoomAt(gestureStart * g.scale, ...local(g));
+    };
+    const block = (e: Event) => e.preventDefault();
+    // On the document so pinching anywhere in the app doesn't zoom the browser page.
+    document.addEventListener("wheel", onWheel, { passive: false });
+    document.addEventListener("gesturestart", onGestureStart, { passive: false } as AddEventListenerOptions);
+    document.addEventListener("gesturechange", onGestureChange, { passive: false } as AddEventListenerOptions);
+    document.addEventListener("gestureend", block, { passive: false } as AddEventListenerOptions);
+    // ⌘+ / ⌘− / ⌘0 zoom the PDF while the pointer is over it.
+    const onKey = (e: KeyboardEvent) => {
+      if (!hovering.current || !(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomAt(liveScale.current * 1.2); }
+      else if (e.key === "-") { e.preventDefault(); zoomAt(liveScale.current / 1.2); }
+      else if (e.key === "0") { e.preventDefault(); setZoom("fit"); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("wheel", onWheel);
+      document.removeEventListener("gesturestart", onGestureStart);
+      document.removeEventListener("gesturechange", onGestureChange);
+      document.removeEventListener("gestureend", block);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [zoomAt]);
+
+  const onClick = (e: React.MouseEvent) => {
+    // ⌘/Ctrl-click jumps to the source; plain clicks and double-clicks select text as usual.
+    if (!(e.metaKey || e.ctrlKey) || !onInverse) return;
     const wrap = (e.target as HTMLElement).closest<HTMLDivElement>(".pdf-page");
-    if (!wrap || !onInverse) return;
+    if (!wrap) return;
+    e.preventDefault();
     const rect = wrap.getBoundingClientRect();
-    const s = scaleRef.current;
+    const s = liveScale.current;
     onInverse(Number(wrap.dataset.page), (e.clientX - rect.left) / s, (e.clientY - rect.top) / s);
   };
 
   const step = (dir: 1 | -1) => {
-    const curr = zoom === "fit" ? scale : zoom;
+    const curr = liveScale.current;
     const next = dir > 0 ? ZOOM_STEPS.find((z) => z > curr + 0.01) : [...ZOOM_STEPS].reverse().find((z) => z < curr - 0.01);
-    if (next) setZoom(next);
+    if (next) zoomAt(next);
   };
 
   return (
@@ -156,7 +248,8 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
         <button className="icon-btn" onClick={() => step(1)} title="Zoom in" disabled={!doc}><Icon name="plus" size={14} /></button>
         {url && <a className="icon-btn" href={url} download title="Download PDF"><Icon name="download" size={14} /></a>}
       </div>
-      <div className="pdf-scroll" ref={scroller} onDoubleClick={onDoubleClick}>
+      <div className="pdf-scroll" ref={scroller} onClick={onClick}
+        onPointerEnter={() => { hovering.current = true; }} onPointerLeave={() => { hovering.current = false; }}>
         {!doc && <div className="empty">{error ? `Couldn't load PDF: ${error}` : emptyMessage ?? "No PDF yet"}</div>}
         <div className="pdf-pages" ref={pagesEl} />
       </div>

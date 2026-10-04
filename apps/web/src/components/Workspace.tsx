@@ -538,7 +538,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                   <button className={!mdPreview ? "active" : ""} onClick={() => mdPreview && toggleMd()}>Edit</button>
                 </div>
               )}
-              {!binaryOpen && !mdPreview && /\.tex$/i.test(textPath ?? "") && <span className="muted small hint">{MOD}J jump to PDF · double-click PDF to jump back</span>}
+              {!binaryOpen && !mdPreview && /\.tex$/i.test(textPath ?? "") && <span className="muted small hint">{MOD}J jump to PDF · {MOD}-click PDF to jump back</span>}
               {!binaryOpen && (
                 <>
                   <button className="btn ghost tight" onClick={() => startComment()} title={`Comment on selection (${MOD}⌥M)`}><Icon name="comment" size={13} />Comment</button>
