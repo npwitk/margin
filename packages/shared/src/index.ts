@@ -4,3 +4,4 @@ export * from "./text.ts";
 export * from "./review.ts";
 export * from "./ai.ts";
 export * from "./bibtex.ts";
+export * from "./connect.ts";

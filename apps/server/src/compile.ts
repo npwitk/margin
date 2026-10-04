@@ -9,7 +9,7 @@ export async function compileWorker(pathAndQuery: string, init?: RequestInit) {
     headers: { "content-type": "application/json", ...(COMPILE_TOKEN ? { "x-compile-token": COMPILE_TOKEN } : {}) },
   }).catch(() => null);
   if (!res) throw new Error("Compile service is not reachable");
-  const body = await res.json();
+  const body = (await res.json()) as { error?: string };
   if (!res.ok) throw new Error(body.error ?? `Compile service error ${res.status}`);
   return body;
 }

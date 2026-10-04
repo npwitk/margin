@@ -10,6 +10,8 @@ import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity
 import { DATA_DIR, SECRET } from "./config.ts";
 import { HttpError, projectDir, resolvePath } from "./storage.ts";
 import { canAccess } from "./access.ts";
+import { handleBridge, handleUi } from "./connect/relay.ts";
+import { verifyToken } from "./tokens.ts";
 
 /**
  * Live collaboration. Every text file is a Yjs document (`<projectId>/<path>`)
@@ -252,10 +254,24 @@ function toRequest(req: IncomingMessage): Request {
   return new Request(`http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`, { headers });
 }
 
-/** Accept WebSocket upgrades on /api/collab and hand them to Hocuspocus. */
+/** Accept WebSocket upgrades: /api/collab (Hocuspocus) and /api/connect/* (Margin Connect). */
 export function attachCollab(server: Server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
-  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  server.on("upgrade", async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (req.url?.startsWith("/api/connect/bridge")) {
+      // Bridges authenticate with an access token.
+      const token = String(req.headers.authorization ?? "").match(/^Bearer\s+(mgn_\S+)$/)?.[1];
+      const owner = token ? await verifyToken(token) : null;
+      if (!owner) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); return socket.destroy(); }
+      return wss.handleUpgrade(req, socket, head, (ws) => handleBridge(ws, { name: owner.name, github: owner.github, agent: "Margin Connect" }));
+    }
+    if (req.url?.startsWith("/api/connect/ui")) {
+      const origin = req.headers.origin;
+      if (origin && new URL(origin).host !== req.headers.host && !process.env.MARGIN_ALLOW_ORIGIN?.split(",").includes(origin)) return socket.destroy();
+      const session = await sessionFromHeaders(toRequest(req).headers);
+      if (!session) { socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n"); return socket.destroy(); }
+      return wss.handleUpgrade(req, socket, head, (ws) => handleUi(ws, session));
+    }
     if (!req.url?.startsWith("/api/collab")) return socket.destroy();
     // Refuse cross-site WebSocket hijacking: the page must come from our own host.
     const origin = req.headers.origin;

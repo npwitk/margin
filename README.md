@@ -56,6 +56,13 @@ Create the token in **Local** (the same dialog shows Codex and generic MCP confi
 
 Under the hood, agents call `/api/projects/:id/agent/tools/:name` with `Authorization: Bearer <token>`. Scripts can use the same API.
 
+## Bring your own agent: Margin Connect
+Drive **Claude Code** or **Codex** from Margin's ✦ Assistant panel, running on your own computer with your own sign-in, MCP servers and skills:
+```sh
+npx -y margin-connect --url https://paper.example.com --token mgn_…   # or: node packages/connect/dist/index.js …
+```
+The bridge (`packages/connect`) speaks the [Agent Client Protocol](https://agentclientprotocol.com) to each agent. It keeps a local copy of the project in sync and 3-way merges the agent's file changes into the live paper, as suggestions or direct edits. It streams plans, tool calls and permission prompts to the browser, attaches Margin's MCP tools, shows the agent to co-authors, and lets you hand a thread to another agent mid-conversation. Other ACP agents can be added with `MARGIN_CONNECT_AGENTS`.
+
 ## Start a paper (P4)
 **New paper** offers three starts:
 - **From a template:** article, IEEE conference or blank.

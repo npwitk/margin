@@ -5,6 +5,9 @@ import { renderMarkdown } from "../lib/markdown.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Avatar } from "./Presence.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
+import { ConnectPanel, ConnectSetup, useAgentChoices } from "./ConnectPanel.tsx";
+import { useConnect } from "../lib/connect.ts";
+import { load, save } from "../lib/storage.ts";
 
 interface Props {
   projectId: string;
@@ -14,6 +17,8 @@ interface Props {
   request?: { text: string; key: number };
   onOpenSettings(): void;
   onOpenSuggestion(path: string, threadId?: string): void;
+  onOpenFile(path: string, review?: boolean): void;
+  onCreateToken(): void;
 }
 
 const STARTERS = [
@@ -23,7 +28,41 @@ const STARTERS = [
   "Split the remaining work into tasks on the board",
 ];
 
-export function AssistantPanel({ projectId, session, settings, request, onOpenSettings, onOpenSuggestion }: Props) {
+/** The ✦ panel: Margin's built-in assistant, or one of your own agents through Margin Connect. */
+export function AssistantPanel(props: Props) {
+  const connect = useConnect(props.projectId);
+  const choices = useAgentChoices(connect);
+  const [source, setSource] = useState<string>(() => load(`agentSource:${props.projectId}`, "margin"));
+  useEffect(() => save(`agentSource:${props.projectId}`, source), [source, props.projectId]);
+  // A "Fix with Claude" request always goes to the built-in assistant.
+  useEffect(() => { if (props.request) setSource("margin"); }, [props.request]);
+  const [focusThread, setFocusThread] = useState<string | undefined>();
+  const [deviceId, agentId] = source.split("|");
+  const choice = choices.find((c) => c.device.id === deviceId && c.agent.id === agentId);
+
+  return (
+    <div className="assistant-wrap">
+      <div className="source-bar">
+        <select value={choice || source === "margin" || source === "setup" ? source : "margin"} onChange={(e) => { setFocusThread(undefined); setSource(e.target.value); }}>
+          <option value="margin">✦ Margin assistant (Claude API)</option>
+          {choices.map((c) => (
+            <option key={`${c.device.id}|${c.agent.id}`} value={`${c.device.id}|${c.agent.id}`} disabled={!c.agent.available}>
+              {c.agent.name} · {c.device.name}{c.agent.available ? "" : " (not installed)"}
+            </option>
+          ))}
+          <option value="setup">+ Use Claude Code or Codex…</option>
+        </select>
+        {connect.devices.length > 0 && <span className="muted small">{connect.devices.length} computer{connect.devices.length > 1 ? "s" : ""} connected</span>}
+      </div>
+      {source === "setup" ? <ConnectSetup onCreateToken={props.onCreateToken} />
+        : choice ? <ConnectPanel connect={connect} device={choice.device} agentId={choice.agent.id} onOpenFile={props.onOpenFile} initialThreadId={focusThread}
+            onPickAgent={(d, a, t) => { setFocusThread(t); setSource(`${d}|${a}`); }} />
+        : <MarginAssistant {...props} />}
+    </div>
+  );
+}
+
+function MarginAssistant({ projectId, session, settings, request, onOpenSettings, onOpenSuggestion }: Props) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [chat, setChat] = useState<Chat | null>(null);
   const [live, setLive] = useState<ChatEntry | null>(null);

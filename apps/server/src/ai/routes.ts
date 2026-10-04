@@ -11,6 +11,7 @@ import { deleteKey, keyInfo, saveKey } from "./keys.ts";
 import { getReview, listReviews, listSkills, startReview } from "./reviewer.ts";
 import { agentToolList, runTool } from "./tools.ts";
 import { startFromIdea } from "./ideaToPaper.ts";
+import { applyAgentChange, snapshot } from "../connect/apply.ts";
 import { limit } from "../ratelimit.ts";
 import { setAgentActivity } from "../collab.ts";
 import { getProject } from "../storage.ts";
@@ -135,6 +136,23 @@ export const aiProjectRoutes = new Hono<AppEnv>()
     status(`Using ${name.replace(/_/g, " ")}`);
     return c.json(await runTool(name, input ?? {}, { projectId: id, session, agentName, status }));
   })
+  // Margin Connect: a local agent's file change, and the project snapshot for its copy.
+  .post("/:id/agent/apply", limit("apply", 3000, 3600), async (c) => {
+    const id = c.req.param("id");
+    await getProject(id);
+    const body = await c.req.json<{ path: string; base: string | null; content: string | null; mode?: "edit" | "suggest" }>();
+    try {
+      return c.json(await applyAgentChange(id, c.get("session"), body.path, body.base, body.content, body.mode === "edit" ? "edit" : "suggest"));
+    } catch (err) {
+      throw new HttpError(400, (err as Error).message);
+    }
+  })
+  .get("/:id/agent/snapshot", async (c) => {
+    const id = c.req.param("id");
+    const p = await getProject(id);
+    return c.json({ project: p, files: await snapshot(id) });
+  })
+
   // Presence for agents working in a local clone: { status, file } to show, { done: true } to clear.
   .post("/:id/agent/activity", async (c) => {
     const id = c.req.param("id");

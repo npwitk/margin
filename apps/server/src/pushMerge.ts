@@ -24,7 +24,7 @@ export async function head(dir: string) {
 }
 
 /** 3-way text merge with `git merge-file`. Conflicts get standard markers. */
-async function merge3(ours: string, base: string, theirs: string): Promise<{ text: string; conflicts: number }> {
+export async function merge3(ours: string, base: string, theirs: string): Promise<{ text: string; conflicts: number }> {
   const tmp = await mkdtemp(path.join(tmpdir(), "margin-merge-"));
   try {
     const [o, b, t] = ["ours", "base", "theirs"].map((n) => path.join(tmp, n));

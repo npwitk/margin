@@ -580,7 +580,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
             </div>
             <div className="preview-body" hidden={previewTab !== "assistant"}>
               <AssistantPanel projectId={projectId} session={session} settings={aiSettings} request={assistantRequest}
-                onOpenSettings={() => setAiSettingsOpen(true)} onOpenSuggestion={openSuggestion} />
+                onOpenSettings={() => setAiSettingsOpen(true)} onOpenSuggestion={openSuggestion}
+                onOpenFile={(p, review) => { openFile(p); if (review) setReviewOpen(true); }} onCreateToken={() => setLocalOpen(true)} />
             </div>
             {previewTab === "citations" && (
               <div className="preview-body">
