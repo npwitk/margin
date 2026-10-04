@@ -138,6 +138,31 @@ async function check(fields: Record<string, string>) {
   }
 }
 
+/** Entries of a hand-written `thebibliography` (`\bibitem{key} Authors, ``Title,'' …`). */
+export function parseBibitems(text: string) {
+  const out: { key: string; line: number; fields: Record<string, string> }[] = [];
+  const re = /\\bibitem\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g;
+  const starts = [...text.matchAll(re)];
+  starts.forEach((m, i) => {
+    const end = starts[i + 1]?.index ?? text.search(/\\end\{thebibliography\}/);
+    const body = text.slice(m.index! + m[0].length, end > m.index! ? end : undefined).replace(/%.*$/gm, "").replace(/\s+/g, " ").trim();
+    const fields: Record<string, string> = {};
+    const title = body.match(/``(.+?)''/) ?? body.match(/"(.+?)"/);
+    if (title) {
+      fields.title = title[1].replace(/[,.]\s*$/, "").trim();
+      // IEEE style lists "A. One, B. Two, and C. Three" or "A. One et al."; keep the first author.
+      const first = body.slice(0, title.index).split(/,|\s+and\s+/)[0].replace(/\\textit\{\s*et al\.?\s*\}|\bet al\.?/g, "").trim();
+      if (first) fields.author = first;
+    }
+    const doi = body.match(/doi:?\s*(10\.\d{4,9}\/[^\s,;}]+)/i);
+    if (doi) fields.doi = doi[1].replace(/\.$/, "");
+    const years = body.replace(/doi:?\s*\S+/gi, "").match(/\b(19|20)\d{2}\b/g);
+    if (years) fields.year = years[years.length - 1];
+    out.push({ key: m[1].trim(), line: text.slice(0, m.index).split("\n").length, fields });
+  });
+  return out;
+}
+
 export async function checkCitations(projectId: string): Promise<CitationReport> {
   const files = await textFiles(projectId);
   const contents = new Map(await Promise.all(files.map(async (f) => [f.path, (await textOf(projectId, f.path)) ?? ""] as const)));
@@ -149,8 +174,8 @@ export async function checkCitations(projectId: string): Promise<CitationReport>
 
   const entries: { key: string; file: string; line: number; fields: Record<string, string> }[] = [];
   for (const [file, text] of contents) {
-    if (!file.endsWith(".bib")) continue;
-    for (const e of parseBibtex(text)) entries.push({ key: e.key, file, line: e.line, fields: e.fields });
+    if (file.endsWith(".bib")) for (const e of parseBibtex(text)) entries.push({ key: e.key, file, line: e.line, fields: e.fields });
+    else if (file.endsWith(".tex") && text.includes("\\bibitem")) for (const e of parseBibitems(text)) entries.push({ ...e, file });
   }
 
   // A few lookups at a time; be polite to the public APIs.

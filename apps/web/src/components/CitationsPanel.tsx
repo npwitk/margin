@@ -56,7 +56,7 @@ export function CitationsPanel({ projectId, onOpen, notify }: { projectId: strin
         {report?.missing.map((m) => (
           <button key={`missing-${m.key}`} className="cite-row" onClick={() => onOpen(m.file, m.line)}>
             <span className="cite-status not_found">Missing</span>
-            <div className="grow"><div className="cite-key">{m.key}</div><div className="muted small">Cited in {m.file}:{m.line} but not in any .bib file.</div></div>
+            <div className="grow"><div className="cite-key">{m.key}</div><div className="muted small">Cited in {m.file}:{m.line} but not in any .bib file or \bibitem.</div></div>
           </button>
         ))}
         {shown.map((e) => (
