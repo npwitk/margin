@@ -1,5 +1,5 @@
 import type {
-  AiSettings, AuthMethods, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
+  AiSettings, AuthMethods, ProjectAccess, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
 export type StoredReview = Omit<PaperReview, "result"> & { status: "running" | "done" | "error"; error?: string; result?: PaperReview["result"] };
@@ -35,6 +35,13 @@ export const api = {
   projects: () => req<Project[]>("/projects"),
   createProject: (name: string, template: string) => req<Project>("/projects", json("POST", { name, template })),
   project: (id: string) => req<Project>(P(id)),
+  importZip: (file: File) => {
+    const form = new FormData();
+    form.set("file", file);
+    return req<Project & { imported: number }>("/projects/import", { method: "POST", body: form });
+  },
+  importFrom: (body: { arxiv?: string; git?: string }) => req<Project & { imported: number }>("/projects/import", json("POST", body)),
+  fromIdea: (body: { idea: string; goal?: string; template?: string; members?: string[] }) => req<Project>("/ai/from-idea", json("POST", body)),
   updateProject: (id: string, patch: Partial<{ name: string; mainFile: string; engine: Engine; goal: string }>) =>
     req<Project>(P(id), json("PATCH", patch)),
 
@@ -105,6 +112,13 @@ export const api = {
     req<{ id: string }>(`${P(id)}/review`, json("POST", body)),
   citations: (id: string) => req<CitationReport>(`${P(id)}/citations`),
   addDoi: (id: string, doi: string) => req<{ key: string; file: string; bibtex: string }>(`${P(id)}/citations/doi`, json("POST", { doi })),
+
+  access: (id: string) => req<ProjectAccess>(`${P(id)}/access`),
+  createInvite: (id: string) => req<{ id: string; token: string; expiresAt: string }>(`${P(id)}/invites`, json("POST")),
+  revokeInvite: (id: string, inviteId: string) => req(`${P(id)}/invites/${inviteId}`, { method: "DELETE" }),
+  join: (id: string, token: string) => req<Project>(`${P(id)}/join`, json("POST", { token })),
+  removeMember: (id: string, memberId: string) => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }),
+  setRole: (id: string, memberId: string, role: "owner" | "editor") => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, json("PATCH", { role })),
 
   history: (id: string) => req<Checkpoint[]>(`${P(id)}/history`),
   checkpoint: (id: string, message: string) => req<{ checkpoint: Checkpoint | null }>(`${P(id)}/checkpoint`, json("POST", { message })),

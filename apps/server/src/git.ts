@@ -26,12 +26,12 @@ function authorOf(name: string) {
   return `${name.replace(/[<>]/g, "")} <${slug}@users.margin.local>`;
 }
 
-export async function initRepo(dir: string, authorName: string) {
+export async function initRepo(dir: string, authorName: string, message = "Create project") {
   await git(dir, ["init", "-q", "-b", "main"]);
   await git(dir, ["config", "user.name", "Margin"]);
   await git(dir, ["config", "user.email", "bot@margin.local"]);
   await git(dir, ["add", "-A"]);
-  await git(dir, ["commit", "-q", "-m", "Create project", "--author", authorOf(authorName)]);
+  await git(dir, ["commit", "-q", "-m", message, "--author", authorOf(authorName)]);
 }
 
 /** Commit everything that changed. Returns null when there is nothing to commit. */

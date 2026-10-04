@@ -11,6 +11,7 @@ import { checkpoint, withGitLock } from "./git.ts";
 import { head, mergePushed } from "./pushMerge.ts";
 import { projectDir } from "./storage.ts";
 import { verifyToken } from "./tokens.ts";
+import { canAccess } from "./access.ts";
 
 /**
  * Git smart HTTP (`git clone https://host/git/<id>.git`), served by
@@ -42,7 +43,7 @@ function unauthorized(c: Context, message = "Authentication required") {
   return c.text(`${message}\n`, 401, { "WWW-Authenticate": 'Basic realm="Margin", charset="UTF-8"' });
 }
 
-async function memberFrom(c: Context): Promise<string | null> {
+async function memberFrom(c: Context): Promise<{ name: string; github?: string } | null> {
   const auth = c.req.header("authorization");
   if (!auth?.startsWith("Basic ")) return null;
   const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
@@ -63,8 +64,10 @@ export async function handleGit(c: Context) {
   const dir = projectDir(id);
   if (!(await stat(path.join(dir, ".git")).catch(() => null))) return c.text("Repository not found\n", 404);
 
-  const member = await memberFrom(c);
-  if (!member) return unauthorized(c, c.req.header("authorization") ? "Invalid token" : undefined);
+  const owner = await memberFrom(c);
+  if (!owner) return unauthorized(c, c.req.header("authorization") ? "Invalid token" : undefined);
+  if (!(await canAccess(id, owner))) return c.text("Repository not found\n", 404);
+  const member = owner.name;
 
   const service = rest === "/info/refs" ? c.req.query("service") : rest.slice(1);
   if (service !== "git-upload-pack" && service !== "git-receive-pack") return c.text("Dumb HTTP is not supported\n", 403);

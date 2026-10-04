@@ -10,6 +10,8 @@ import { MODEL, SHARED_KEY, describeApiError } from "./client.ts";
 import { deleteKey, keyInfo, saveKey } from "./keys.ts";
 import { getReview, listReviews, listSkills, startReview } from "./reviewer.ts";
 import { agentToolList, runTool } from "./tools.ts";
+import { startFromIdea } from "./ideaToPaper.ts";
+import { limit } from "../ratelimit.ts";
 import { setAgentActivity } from "../collab.ts";
 import { getProject } from "../storage.ts";
 import type { Session } from "@margin/shared";
@@ -47,6 +49,16 @@ export const aiSettingsRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   });
 
+/** /api/ai/from-idea: create a project and let Claude plan it. */
+aiSettingsRoutes.post("/from-idea", limit("idea", 10, 3600), async (c) => {
+  const body = await c.req.json<{ idea?: string; goal?: string; template?: string; members?: string[] }>();
+  try {
+    return c.json(await startFromIdea(c.get("session"), { idea: body.idea ?? "", goal: body.goal, template: body.template, members: body.members }), 202);
+  } catch (err) {
+    return c.json({ error: describeApiError(err) }, 400);
+  }
+});
+
 /** /api/projects/:id/ai/... and /citations */
 export const aiProjectRoutes = new Hono<AppEnv>()
   .onError((err, c) => {
@@ -68,7 +80,7 @@ export const aiProjectRoutes = new Hono<AppEnv>()
   .post("/:id/ai/chats/:chat/stop", (c) => { stopChat(c.req.param("chat")); return c.json({ ok: true }); })
 
   // Send a message; the reply streams back as server-sent events.
-  .post("/:id/ai/chats/:chat/messages", async (c) => {
+  .post("/:id/ai/chats/:chat/messages", limit("chat", 120, 3600), async (c) => {
     const { text } = await c.req.json<{ text?: string }>();
     if (!text?.trim()) throw new HttpError(400, "Message is empty");
     const id = c.req.param("id"), chatId = c.req.param("chat"), session = c.get("session");
@@ -97,7 +109,7 @@ export const aiProjectRoutes = new Hono<AppEnv>()
     if (!r) throw new HttpError(404, "Review not found");
     return c.json(r);
   })
-  .post("/:id/ai/reviews", async (c) => {
+  .post("/:id/ai/reviews", limit("review", 20, 3600), async (c) => {
     const { skill, goal } = await c.req.json<{ skill?: string; goal?: string }>();
     try {
       return c.json(await startReview(c.req.param("id"), c.get("session"), skill ?? "general", goal), 202);
@@ -111,7 +123,7 @@ export const aiProjectRoutes = new Hono<AppEnv>()
     await getProject(c.req.param("id"));
     return c.json(agentToolList());
   })
-  .post("/:id/agent/tools/:name", async (c) => {
+  .post("/:id/agent/tools/:name", limit("agent", 600, 3600), async (c) => {
     const id = c.req.param("id"), name = c.req.param("name");
     await getProject(id);
     const { input } = await c.req.json<{ input?: unknown }>().catch(() => ({ input: undefined }));
@@ -136,7 +148,7 @@ export const aiProjectRoutes = new Hono<AppEnv>()
   })
 
   // Citations
-  .get("/:id/citations", async (c) => c.json(await checkCitations(c.req.param("id"))))
+  .get("/:id/citations", limit("citations", 20, 600), async (c) => c.json(await checkCitations(c.req.param("id"))))
   .post("/:id/citations/doi", async (c) => {
     const { doi, file } = await c.req.json<{ doi?: string; file?: string }>();
     try {

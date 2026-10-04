@@ -12,9 +12,12 @@ import type { AppEnv } from "./auth.ts";
 import { compileProject, compileWorker } from "./compile.ts";
 import { emit, flushProject, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
 import { checkpoint, history, withGitLock } from "./git.ts";
+import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
+import { addOwner, canAccess, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
+import { limit } from "./ratelimit.ts";
 import {
-  HttpError, createEntry, etagOf, createProject, deleteEntry, getProject, listFiles, listProjects, moveEntry,
+  HttpError, createEntry, createProjectFromFiles, etagOf, createProject, deleteEntry, getProject, listFiles, listProjects, moveEntry,
   projectDir, readText, resolvePath, syncWorkDir, touchProject, updateProject, workDir, writeBinary, writeText,
 } from "./storage.ts";
 
@@ -37,7 +40,7 @@ export const tokenRoutes = new Hono<AppEnv>()
   .get("/", async (c) => c.json(await listTokens(c.get("session").name)))
   .post("/", async (c) => {
     const { label } = await c.req.json<{ label?: string }>().catch(() => ({ label: undefined }));
-    return c.json(await createToken(c.get("session").name, label ?? ""), 201);
+    return c.json(await createToken(c.get("session").name, label ?? "", c.get("session").github), 201);
   })
   .delete("/:tid", async (c) => {
     const ok = await revokeToken(c.get("session").name, c.req.param("tid"));
@@ -51,11 +54,41 @@ export const projectRoutes = new Hono<AppEnv>()
     return c.json({ error: err.message || "Server error" }, 500);
   })
 
-  .get("/", async (c) => c.json(await listProjects()))
+  .get("/", async (c) => {
+    const session = c.get("session");
+    const all = await listProjects();
+    const visible = await Promise.all(all.map((p) => canAccess(p.id, session)));
+    return c.json(all.filter((_, i) => visible[i]));
+  })
 
-  .post("/", async (c) => {
+  .post("/", limit("create", 20, 3600), async (c) => {
     const { name, template } = await c.req.json<{ name: string; template?: string }>();
-    return c.json(await createProject(name, template ?? "article", c.get("session").name), 201);
+    const project = await createProject(name, template ?? "article", c.get("session").name);
+    await addOwner(project.id, c.get("session"));
+    return c.json(project, 201);
+  })
+
+  // Import: multipart with a .zip, or JSON { arxiv } / { git }.
+  .post("/import", limit("import", 10, 3600), bodyLimit({ maxSize: 100 * 1024 * 1024, onError: (c) => c.json({ error: "Upload too large (100 MB max)" }, 413) }), async (c) => {
+    const author = c.get("session").name;
+    let result, source, name: string | undefined;
+    if ((c.req.header("content-type") ?? "").includes("multipart/form-data")) {
+      const form = await c.req.formData();
+      const file = form.get("file");
+      if (!file || typeof file === "string") throw new HttpError(400, "Choose a .zip file");
+      name = String(form.get("name") ?? "") || file.name.replace(/\.zip$/i, "").replace(/[_-]+/g, " ");
+      result = importZip(new Uint8Array(await file.arrayBuffer()));
+      source = file.name;
+    } else {
+      const body = await c.req.json<{ arxiv?: string; git?: string; name?: string }>();
+      if (body.arxiv) { result = await importArxiv(body.arxiv); source = `arXiv ${body.arxiv.trim()}`; }
+      else if (body.git) { result = await importGit(body.git); source = body.git.trim(); }
+      else throw new HttpError(400, "Nothing to import");
+      name = body.name;
+    }
+    const project = await createProjectFromFiles(name || result.title || "Imported paper", result.files, result.mainFile, result.engine, author, source);
+    await addOwner(project.id, c.get("session"));
+    return c.json({ ...project, imported: result.files.length }, 201);
   })
 
   .get("/:id", async (c) => c.json(await getProject(c.req.param("id"))))
@@ -147,7 +180,7 @@ export const projectRoutes = new Hono<AppEnv>()
   })
 
   // ── Compile & preview ────────────────────────────────────────────────────
-  .post("/:id/compile", async (c) => c.json(await compileProject(c.req.param("id"), c.get("session").name)))
+  .post("/:id/compile", limit("compile", 30, 60), async (c) => c.json(await compileProject(c.req.param("id"), c.get("session").name)))
 
   .get("/:id/output.pdf", async (c) => {
     const id = c.req.param("id");
@@ -220,6 +253,24 @@ export const projectRoutes = new Hono<AppEnv>()
       return !!setStatus(doc, threadId, body.action, by);
     });
     if (!ok) throw new HttpError(409, "Can't do that to this thread");
+    return c.json({ ok: true });
+  })
+
+  // ── Members & invites ────────────────────────────────────────────────────
+  .get("/:id/access", async (c) => c.json(await getAccess(c.req.param("id"), c.get("session"))))
+  .post("/:id/invites", async (c) => c.json(await createInvite(c.req.param("id"), c.get("session")), 201))
+  .delete("/:id/invites/:invite", async (c) => { await revokeInvite(c.req.param("id"), c.get("session"), c.req.param("invite")); return c.json({ ok: true }); })
+  .post("/:id/join", limit("join", 20, 3600), async (c) => {
+    const { token } = await c.req.json<{ token?: string }>();
+    await getProject(c.req.param("id"));
+    await joinWithInvite(c.req.param("id"), c.get("session"), token ?? "");
+    return c.json(await getProject(c.req.param("id")));
+  })
+  .delete("/:id/members/:member", async (c) => { await removeMember(c.req.param("id"), c.get("session"), decodeURIComponent(c.req.param("member"))); return c.json({ ok: true }); })
+  .patch("/:id/members/:member", async (c) => {
+    const { role } = await c.req.json<{ role?: "owner" | "editor" }>();
+    if (role !== "owner" && role !== "editor") throw new HttpError(400, "Role must be owner or editor");
+    await setRole(c.req.param("id"), c.get("session"), decodeURIComponent(c.req.param("member")), role);
     return c.json({ ok: true });
   })
 

@@ -30,6 +30,21 @@ export const GITHUB = process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_
 /** Public origin for OAuth redirects, e.g. https://paper.example.com (defaults to the request's host). */
 export const PUBLIC_URL = process.env.MARGIN_PUBLIC_URL?.replace(/\/$/, "");
 
+/**
+ * "workspace": a group's own server - everyone signed in can open every project.
+ * "members": public sign-ups - projects are private to their members (invite links).
+ * Defaults to members when GitHub sign-in is open to anyone.
+ */
+export const ACCESS_MODE: "workspace" | "members" =
+  process.env.MARGIN_ACCESS === "members" || process.env.MARGIN_ACCESS === "workspace"
+    ? process.env.MARGIN_ACCESS
+    : GITHUB?.allow.includes("*") ? "members" : "workspace";
+
+if (ACCESS_MODE === "members" && !GITHUB) {
+  const msg = "MARGIN_ACCESS=members needs GitHub sign-in: with a shared password, names are self-declared and anyone could claim to be a member.";
+  if (isProd) { console.error(msg); process.exit(1); } else console.warn(msg);
+}
+
 /** With no login method configured the app is open: fine on localhost, never in production. */
 export const OPEN_ACCESS = !PASSWORD && !GITHUB;
 

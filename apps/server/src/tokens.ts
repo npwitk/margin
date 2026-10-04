@@ -7,6 +7,8 @@ import { DATA_DIR } from "./config.ts";
 export interface TokenRecord {
   id: string;
   member: string;
+  /** GitHub login of the member, when they signed in with GitHub. */
+  github?: string;
   label: string;
   hash: string;
   createdAt: string;
@@ -36,11 +38,12 @@ export async function listTokens(member: string) {
   return (await load()).filter((t) => t.member === member).map(publicView);
 }
 
-export async function createToken(member: string, label: string) {
+export async function createToken(member: string, label: string, github?: string) {
   const token = `mgn_${randomBytes(24).toString("base64url")}`;
   const rec: TokenRecord = {
     id: randomBytes(6).toString("hex"),
     member,
+    github,
     label: label.trim().slice(0, 60) || "Token",
     hash: sha256(token),
     createdAt: new Date().toISOString(),
@@ -57,8 +60,8 @@ export async function revokeToken(member: string, id: string) {
   return true;
 }
 
-/** Returns the member a token belongs to, or null. */
-export async function verifyToken(token: string): Promise<string | null> {
+/** Returns who a token belongs to, or null. */
+export async function verifyToken(token: string): Promise<{ name: string; github?: string } | null> {
   if (!token.startsWith("mgn_")) return null;
   const h = Buffer.from(sha256(token));
   const list = await load();
@@ -69,5 +72,5 @@ export async function verifyToken(token: string): Promise<string | null> {
     rec.lastUsedAt = new Date(now).toISOString();
     await store(list);
   }
-  return rec.member;
+  return { name: rec.member, github: rec.github };
 }

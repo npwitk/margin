@@ -7,6 +7,8 @@ export interface Project {
   engine: Engine;
   /** What the paper is aiming for, e.g. "NeurIPS 2027 main track". Used by the AI reviewer. */
   goal?: string;
+  /** Set while Claude is turning an idea into a first draft. */
+  setup?: { status: "planning" | "done" | "error"; error?: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -63,6 +65,25 @@ export interface Session {
   avatar?: string;
   /** Set when the request comes from an external agent (e.g. "Claude Code") using an access token. */
   agent?: string;
+}
+
+export type MemberRole = "owner" | "editor";
+
+export interface Member {
+  /** "gh:<login>" for GitHub accounts, "name:<name>" for password sign-in. */
+  id: string;
+  name: string;
+  role: MemberRole;
+  avatar?: string;
+  joinedAt: string;
+}
+
+export interface ProjectAccess {
+  /** "workspace": everyone signed in can open every project. "members": only listed members. */
+  mode: "workspace" | "members";
+  members: Member[];
+  invites: { id: string; createdBy: string; createdAt: string; expiresAt: string }[];
+  you?: Member;
 }
 
 export interface AuthMethods {

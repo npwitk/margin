@@ -9,6 +9,7 @@ import * as Y from "yjs";
 import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type RoomEvents, type Session, type Task } from "@margin/shared";
 import { DATA_DIR, SECRET } from "./config.ts";
 import { HttpError, projectDir, resolvePath } from "./storage.ts";
+import { canAccess } from "./access.ts";
 
 /**
  * Live collaboration. Every text file is a Yjs document (`<projectId>/<path>`)
@@ -37,7 +38,8 @@ async function exists(p: string) {
 
 async function writeAtomic(file: string, data: string | Uint8Array) {
   await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
+  // Unique per write: two saves of the same file may overlap.
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.margin-tmp`;
   await writeFile(tmp, data);
   await rename(tmp, file);
 }
@@ -110,6 +112,7 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
     const t = target(documentName);
     if (!(await exists(path.join(projectDir(t.projectId), ".margin", "project.json")))) throw new Error("no such project");
     if (!t.room && !(await exists(t.file))) throw new Error("no such file");
+    if (!(await canAccess(t.projectId, session))) throw new Error("no such project");
     return { session };
   },
 

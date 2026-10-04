@@ -406,9 +406,9 @@ button.chip:hover { border-color: var(--border-strong); }
 .column.drop { border-color: var(--accent); background: var(--accent-soft); }
 .column-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 6px 12px; font-weight: 500; }
 .status-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--text-faint); }
-.status-dot.doing { border-color: var(--warn); border-right-color: transparent; }
-.status-dot.review { border-color: var(--accent); background: var(--accent-soft); }
-.status-dot.done { border-color: var(--ok); background: var(--ok); }
+.status-dot.st-doing { border-color: var(--warn); border-right-color: transparent; }
+.status-dot.st-review { border-color: var(--accent); background: var(--accent-soft); }
+.status-dot.st-done { border-color: var(--ok); background: var(--ok); }
 .cards { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 2px 8px 10px; }
 .card {
   padding: 9px 11px; border-radius: 8px; cursor: pointer;
@@ -463,7 +463,7 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
 .cm-suggest-del { text-decoration: line-through; text-decoration-color: var(--danger); background: var(--danger-soft); cursor: pointer; }
 .cm-suggest-ins { color: var(--ok); background: rgba(46, 157, 98, 0.12); border-bottom: 1px solid var(--ok); cursor: pointer; margin-left: 1px; }
 
-.review { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--panel); min-height: 0; }
+.review-panel { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--panel); min-height: 0; }
 .review-head { display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .review-list { flex: 1; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
 .thread { padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--raised); cursor: pointer; display: grid; gap: 7px; }
@@ -488,7 +488,7 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
 .notes.code { font: 12.5px/1.45 var(--font-mono); min-height: 60px; }
 .row.end { justify-content: flex-end; }
 @media (max-width: 1100px) { .pane-tab .hint { display: none; } }
-@media (max-width: 760px) { .review { width: 100%; position: absolute; inset: 0; z-index: 5; } }
+@media (max-width: 760px) { .review-panel { width: 100%; position: absolute; inset: 0; z-index: 5; } }
 .chip, .btn.tight { white-space: nowrap; flex-shrink: 0; }
 .pane-tab .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
 .pane-tab.with-review .hint { display: none; }
@@ -634,3 +634,15 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
 .agent-tabs button.active { background: var(--active); color: var(--text); }
 .code-block { margin: 0 0 6px; padding: 10px 12px; border-radius: 6px; background: var(--sidebar); border: 1px solid var(--border); font: 12px/1.5 var(--font-mono); overflow-x: auto; white-space: pre; user-select: all; }
 .modal.wide { max-height: calc(86vh - 32px); overflow: auto; }
+.mode-tabs { margin: 0 0 12px; display: flex; }
+.mode-tabs button { flex: 1; }
+.dropzone { display: grid; place-items: center; height: 70px; margin-top: 10px; border: 1px dashed var(--border-strong); border-radius: 8px; cursor: pointer; }
+.dropzone:hover { border-color: var(--accent); background: var(--accent-soft); }
+.import-ref { margin-top: 10px; }
+.idea-box { min-height: 120px; margin-bottom: 8px; }
+.modal form > .row.gap { margin-bottom: 8px; }
+.planning-banner { display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--claude-soft); color: var(--text); border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.planning-banner.error-banner { background: var(--danger-soft); }
+.invite-box { display: grid; gap: 6px; justify-items: start; margin: 4px 0 14px; }
+.invite-box .code-line { width: 100%; }
+.modal form p { margin: 8px 0 0; }

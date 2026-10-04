@@ -5,6 +5,7 @@ import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
 import { useThreads } from "../lib/review.ts";
 import { ReviewPanel, type Draft } from "./ReviewPanel.tsx";
 import { LocalDialog } from "./LocalDialog.tsx";
+import { ShareDialog } from "./ShareDialog.tsx";
 import { AiSettingsDialog } from "./AiSettingsDialog.tsx";
 import { AssistantPanel } from "./AssistantPanel.tsx";
 import { CitationsPanel } from "./CitationsPanel.tsx";
@@ -46,6 +47,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [localOpen, setLocalOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   const [highlight, setHighlight] = useState<SyncTexForward & { key: number }>();
   const [toast, setToast] = useState<string | null>(null);
@@ -167,6 +169,21 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       })
       .catch((err) => setLoadError(err.message));
   }, [projectId, openFile, compile]);
+
+  // While Claude plans a paper from an idea, poll until it's ready.
+  const planning = project?.setup?.status === "planning";
+  useEffect(() => {
+    if (!planning) return;
+    const t = window.setInterval(async () => {
+      const p = await api.project(projectId).catch(() => null);
+      if (!p || p.setup?.status === "planning") return;
+      setProject(p);
+      await refreshFiles();
+      if (p.setup?.status === "done") { notify("Your paper is planned: outline, related work and tasks are ready."); compile(); setView("board"); }
+      else notify(p.setup?.error ?? "Planning failed");
+    }, 3000);
+    return () => window.clearInterval(t);
+  }, [planning, projectId, refreshFiles, compile, notify]);
 
   // A teammate deleted or renamed the file you had open.
   useEffect(() => {
@@ -381,6 +398,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       { id: "sidebar", label: "Toggle sidebar", section: "View", icon: "folder", hint: `${MOD}B`, run: () => setSidebar((s: boolean) => !s) },
       { id: "newfile", label: "New file…", section: "Action", icon: "plus", run: () => void onTreeAction("newFile", "") },
       { id: "upload", label: "Upload files…", section: "Action", icon: "upload", run: () => void onTreeAction("upload", "") },
+      { id: "share", label: "Share: members and invite links…", section: "Project", icon: "plus", run: () => setShareOpen(true) },
       { id: "local", label: "Work locally (git clone, agents)…", section: "Project", icon: "terminal", run: () => setLocalOpen(true) },
       { id: "rename-project", label: "Rename project…", section: "Project", icon: "file", run: () => void renameProject() },
       { id: "projects", label: "Back to all projects", section: "Navigate", icon: "back", run: () => navigate({ name: "projects" }) },
@@ -433,6 +451,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                 <><Icon name="check" size={13} />Clean</>}
           </button>
         )}
+        <button className="btn ghost" onClick={() => setShareOpen(true)} title="Members and invite links"><Icon name="plus" size={14} />Share</button>
         <button className="btn ghost" onClick={() => setLocalOpen(true)} title="Clone with git / work with agents"><Icon name="terminal" size={14} />Local</button>
         <button className="btn ghost" onClick={() => setHistoryOpen(true)} title="Checkpoints"><Icon name="history" size={14} />Checkpoint</button>
         <button className="btn ghost" onClick={() => setPaletteOpen(true)} title="Command palette"><kbd>{MOD}K</kbd></button>
@@ -449,6 +468,12 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       {view === "review" && (
         <ReviewView project={project} settings={aiSettings} onProjectChange={setProject} onOpenSettings={() => setAiSettingsOpen(true)}
           onOpen={(p, line) => openFile(p, line)} notify={notify} />
+      )}
+      {planning && (
+        <div className="planning-banner"><Spinner /> ✦ Claude is planning your paper: research question, outline, related work and tasks. This takes about a minute.</div>
+      )}
+      {project.setup?.status === "error" && (
+        <div className="planning-banner error-banner">Planning didn't finish: {project.setup.error} The template is ready to use; you can also ask the Assistant to plan the outline.</div>
       )}
       <div className="body" hidden={view !== "write"}>
         {sidebar && (
@@ -580,6 +605,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       {historyOpen && <HistoryPanel projectId={projectId} onClose={() => setHistoryOpen(false)} beforeCheckpoint={() => collab.flush()} />}
       {aiSettingsOpen && <AiSettingsDialog settings={aiSettings} onChange={setAiSettings} onClose={() => setAiSettingsOpen(false)} />}
+      {shareOpen && <ShareDialog projectId={projectId} session={session} onClose={() => setShareOpen(false)} />}
       {localOpen && <LocalDialog projectId={projectId} session={session} onClose={() => setLocalOpen(false)} />}
       {prompt && <PromptDialog req={prompt} onDone={() => setPrompt(null)} />}
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}

@@ -46,7 +46,7 @@ export async function getProject(id: string): Promise<Project> {
   return JSON.parse(raw) as Project;
 }
 
-async function saveProject(p: Project) {
+export async function saveProject(p: Project) {
   await writeFile(path.join(projectDir(p.id), META), JSON.stringify(p, null, 2) + "\n");
 }
 
@@ -74,6 +74,26 @@ export async function createProject(name: string, template: string, author: stri
   const project: Project = { id, name: title, mainFile: "main.tex", engine: "pdflatex", createdAt: now, updatedAt: now };
   await saveProject(project);
   await initRepo(dir, author);
+  return project;
+}
+
+/** Create a project from imported files (zip, arXiv, git). */
+export async function createProjectFromFiles(
+  name: string, files: { path: string; data: Uint8Array }[], mainFile: string, engine: Engine, author: string, source: string,
+): Promise<Project> {
+  const title = name.trim().slice(0, 120) || "Imported paper";
+  const id = `${slugify(title)}-${randomBytes(3).toString("hex")}`;
+  const dir = projectDir(id);
+  await mkdir(path.join(dir, ".margin"), { recursive: true });
+  for (const f of files) {
+    const abs = resolvePath(id, f.path);
+    await mkdir(path.dirname(abs), { recursive: true });
+    await writeFile(abs, f.data);
+  }
+  const now = new Date().toISOString();
+  const project: Project = { id, name: title, mainFile, engine, createdAt: now, updatedAt: now };
+  await saveProject(project);
+  await initRepo(dir, author, `Import from ${source}`);
   return project;
 }
 
@@ -108,14 +128,15 @@ export async function listFiles(id: string): Promise<FileEntry[]> {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const e of entries) {
       if (!prefix && HIDDEN.has(e.name)) continue;
-      if (e.name === ".DS_Store" || e.name === ".gitkeep") continue;
+      if (e.name === ".DS_Store" || e.name === ".gitkeep" || e.name.endsWith(".margin-tmp")) continue;
       const rel = prefix ? `${prefix}/${e.name}` : e.name;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         out.push({ path: rel, type: "dir", size: 0 });
         await walk(abs, rel);
       } else if (e.isFile()) {
-        out.push({ path: rel, type: "file", size: (await stat(abs)).size });
+        const st = await stat(abs).catch(() => null); // may vanish mid-listing
+        if (st) out.push({ path: rel, type: "file", size: st.size });
       }
     }
   }
@@ -178,6 +199,11 @@ export async function syncWorkDir(id: string) {
   await cp(src, dest, {
     recursive: true,
     // Skip symlinks too: they could point TeX at files outside the project.
-    filter: async (from) => from === src || (!NEVER_COMPILE.has(path.basename(from)) && !(await lstat(from)).isSymbolicLink()),
+    filter: async (from) => {
+      if (from === src) return true;
+      if (NEVER_COMPILE.has(path.basename(from)) || from.endsWith(".margin-tmp")) return false;
+      const st = await lstat(from).catch(() => null);
+      return !!st && !st.isSymbolicLink();
+    },
   });
 }

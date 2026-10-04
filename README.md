@@ -2,7 +2,7 @@
 
 An open-source, AI-native LaTeX workspace for research groups. Write, compile and review papers together. Agents like Claude Code and Codex work alongside you as visible teammates.
 
-> Working name. Status: **P3 complete** (external agents). Next up: P4 (idea → paper workflow, public launch).
+> Working name. Status: **P4**: idea → paper, importers, membership and invites done. See the roadmap for what's left before public sign-ups.
 
 ## What works today (P0)
 - Projects stored as **git repos** you own; checkpoints are commits credited to each member
@@ -44,17 +44,29 @@ Claude (`claude-opus-5-5`) is built in. Bring your own key: each member adds the
 Refusals fall back automatically (`fallbacks: "default"`); the agent's history is append-only and prompt-cached.
 
 ## Your own agents (P3)
-`packages/mcp` is **margin-mcp**, an MCP server that connects Claude Code, Codex, Cursor or any MCP client to a Margin project with the same tools as the built-in assistant: read, search, suggest edits, comment, compile, list/claim/update board tasks, and read/answer review comments. The agent shows up live for the whole group ("Claude Code for Alice"), and its edits arrive as suggestions.
+`packages/mcp` is **margin-paper-mcp**, an MCP server that connects Claude Code, Codex, Cursor or any MCP client to a Margin project with the same tools as the built-in assistant: read, search, suggest edits, comment, compile, list/claim/update board tasks, and read/answer review comments. The agent shows up live for the whole group ("Claude Code for Alice"), and its edits arrive as suggestions.
 
 ```sh
 # Inside a git clone of the project (URL and project are read from the remote):
-claude mcp add margin -e MARGIN_TOKEN=<token> -- npx -y margin-mcp
+claude mcp add margin -e MARGIN_TOKEN=<token> -- npx -y margin-paper-mcp
 # Anywhere:
-claude mcp add margin -e MARGIN_TOKEN=<token> -- npx -y margin-mcp --url https://paper.example.com --project <id>
+claude mcp add margin -e MARGIN_TOKEN=<token> -- npx -y margin-paper-mcp --url https://paper.example.com --project <id>
 ```
-Create the token in **Local** (the same dialog shows Codex and generic MCP config). Until it's published to npm, build it with `npm run build -w margin-mcp` and use `node packages/mcp/dist/index.js`.
+Create the token in **Local** (the same dialog shows Codex and generic MCP config). Until it's published to npm, build it with `npm run build -w margin-paper-mcp` and use `node packages/mcp/dist/index.js`.
 
 Under the hood, agents call `/api/projects/:id/agent/tools/:name` with `Authorization: Bearer <token>`. Scripts can use the same API.
+
+## Start a paper (P4)
+**New paper** offers three starts:
+- **From a template:** article, IEEE conference or blank.
+- **Import existing work:** an Overleaf `.zip` (Menu → Download → Source), an arXiv paper's LaTeX source (`1706.03762` or its URL), or a public `https://` git repository. The main file and engine (pdfLaTeX/XeLaTeX/LuaLaTeX) are detected. Archives are size-capped and path-checked, and git imports can't reach private networks.
+- **✦ From an idea:** describe the idea, a target venue and co-authors. Claude sharpens the research question, outlines sections into files, drafts the abstract and puts first tasks on the board for each co-author. It adds **real** related work (OpenAlex search plus DOI metadata, never generated) to `refs/references.bib` and `notes/idea.md`.
+
+## Sharing and access
+- `MARGIN_ACCESS=workspace` (default): a group's own server; everyone signed in can open every project.
+- `MARGIN_ACCESS=members`: for public sign-ups, and the default when `MARGIN_GITHUB_ALLOW=*`. Projects are private to their members across the API, live editing, git and agent tokens. Owners invite people with 14-day links (**Share**) and manage roles. Requires GitHub sign-in, since password names are self-declared.
+- Membership is stored outside the project's git repo, so a push can't change it.
+- Per-member rate limits cover compiles, imports, AI and new projects (`MARGIN_RATE_LIMITS=off` to disable).
 
 ## Run locally
 Requires Node 22+, git, and a TeX distribution with `latexmk` and `synctex` (e.g. MacTeX).
@@ -93,8 +105,8 @@ Before public sign-ups: per-job containers (or gVisor/Firecracker) so projects c
 ## Roadmap
 - **P1, collaboration:** ✓ live editing, presence, board, comments and suggestions, git remote, GitHub sign-in
 - **P2, AI:** ✓ assistant with tools, compile-error fixer, reviewer skills, citation checker, add by DOI · later: PDF reference library (GROBID), chat with your papers
-- **P3, external agents:** ✓ margin-mcp (Claude Code, Codex, any MCP client), token auth for the API, agent presence, task claiming, comment replies · later: publish to npm, remote MCP over HTTP
-- **P4:** idea → paper workflow, Overleaf/arXiv import, public launch, Tauri desktop app
+- **P3, external agents:** ✓ margin-paper-mcp (Claude Code, Codex, any MCP client), token auth for the API, agent presence, task claiming, comment replies · later: publish to npm, remote MCP over HTTP
+- **P4:** ✓ idea → paper, Overleaf/arXiv/git import, members and invites, rate limits, npm-ready margin-paper-mcp · before public sign-ups: per-job compile isolation (gVisor/Firecracker or a container per compile), quotas and storage limits per user, email/abuse handling, backups · later: Tauri desktop app, PDF reference library
 
 ## License
 AGPL-3.0-or-later

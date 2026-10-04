@@ -26,6 +26,7 @@ services:
       MARGIN_GITHUB_ALLOW: ${MARGIN_GITHUB_ALLOW:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
+      MARGIN_ACCESS: ${MARGIN_ACCESS:-}
       COMPILE_URL: http://compile:8788
       COMPILE_TOKEN: ${COMPILE_TOKEN:-margin-internal}
     volumes:

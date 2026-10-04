@@ -38,9 +38,9 @@ export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
   // Agents and scripts authenticate with a personal access token instead of the cookie.
   const bearer = c.req.header("authorization")?.match(/^Bearer\s+(mgn_\S+)$/)?.[1];
   if (bearer) {
-    const member = await verifyToken(bearer);
-    if (!member) return c.json({ error: "Invalid access token" }, 401);
-    c.set("session", { name: member, agent: agentName(c.req.header("x-margin-agent")) });
+    const owner = await verifyToken(bearer);
+    if (!owner) return c.json({ error: "Invalid access token" }, 401);
+    c.set("session", { name: owner.name, github: owner.github, agent: agentName(c.req.header("x-margin-agent")) });
     return next();
   }
   const session = await readSession(c);

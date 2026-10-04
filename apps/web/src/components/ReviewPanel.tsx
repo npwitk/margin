@@ -34,7 +34,7 @@ export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDon
 
   const me = session.name;
   return (
-    <aside className="review">
+    <aside className="review-panel">
       <div className="review-head">
         <span className="section-label">Review</span>
         <div className="spacer" />

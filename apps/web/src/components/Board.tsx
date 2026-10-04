@@ -105,7 +105,7 @@ export function Board({ collab, session, files, peers, onOpenFile }: Props) {
               onDrop={(e) => { e.preventDefault(); drop(c.id); }}
             >
               <header className="column-head">
-                <span className={`status-dot ${c.id}`} />
+                <span className={`status-dot st-${c.id}`} />
                 <span>{c.label}</span>
                 <span className="count">{items.length}</span>
                 <div className="spacer" />

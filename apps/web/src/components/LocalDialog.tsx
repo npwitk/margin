@@ -92,12 +92,12 @@ export function LocalDialog({ projectId, session, onClose }: { projectId: string
         <button className={agentTab === "codex" ? "active" : ""} onClick={() => setAgentTab("codex")}>Codex</button>
         <button className={agentTab === "other" ? "active" : ""} onClick={() => setAgentTab("other")}>Other</button>
       </div>
-      {agentTab === "claude" && <CodeLine text={`claude mcp add margin -e MARGIN_TOKEN=${token} -- npx -y margin-mcp --url ${location.origin} --project ${projectId}`} />}
+      {agentTab === "claude" && <CodeLine text={`claude mcp add margin -e MARGIN_TOKEN=${token} -- npx -y margin-paper-mcp --url ${location.origin} --project ${projectId}`} />}
       {agentTab === "codex" && (
         <pre className="code-block">{`# ~/.codex/config.toml
 [mcp_servers.margin]
 command = "npx"
-args = ["-y", "margin-mcp", "--url", "${location.origin}", "--project", "${projectId}"]
+args = ["-y", "margin-paper-mcp", "--url", "${location.origin}", "--project", "${projectId}"]
 env = { MARGIN_TOKEN = "${token}" }`}</pre>
       )}
       {agentTab === "other" && (
@@ -105,13 +105,13 @@ env = { MARGIN_TOKEN = "${token}" }`}</pre>
   "mcpServers": {
     "margin": {
       "command": "npx",
-      "args": ["-y", "margin-mcp", "--url", "${location.origin}", "--project", "${projectId}"],
+      "args": ["-y", "margin-paper-mcp", "--url", "${location.origin}", "--project", "${projectId}"],
       "env": { "MARGIN_TOKEN": "${token}" }
     }
   }
 }`}</pre>
       )}
-      <p className="muted small">Until margin-mcp is on npm, use <code>node &lt;margin repo&gt;/packages/mcp/dist/index.js</code> in place of <code>npx -y margin-mcp</code>.</p>
+      <p className="muted small">Until margin-paper-mcp is on npm, use <code>node &lt;margin repo&gt;/packages/mcp/dist/index.js</code> in place of <code>npx -y margin-paper-mcp</code>.</p>
 
       {error && <p className="error small">{error}</p>}
       <div className="section-label tokens-label">Your tokens</div>

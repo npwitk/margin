@@ -1,14 +1,16 @@
 {
-  "name": "margin-mcp",
+  "name": "margin-paper-mcp",
   "version": "0.1.0",
   "description": "MCP server that connects Claude Code, Codex and other agents to a Margin project",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "bin": {
+    "margin-paper-mcp": "dist/index.js",
     "margin-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -18,5 +20,22 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "latex",
+    "claude-code",
+    "codex",
+    "research",
+    "collaboration"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR-ORG/margin.git",
+    "directory": "packages/mcp"
   }
 }
