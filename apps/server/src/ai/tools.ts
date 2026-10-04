@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { ROOM, TASK_COLUMNS, createThread, isTextPath, textOf as yText, type Session, type Task } from "@margin/shared";
+import { ROOM, TASK_COLUMNS, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
 import { withDoc } from "../collab.ts";
 import { compileProject } from "../compile.ts";
 import { getProject, listFiles, resolvePath } from "../storage.ts";
@@ -14,6 +14,8 @@ import { textFiles, textOf } from "./paper.ts";
 export interface ToolContext {
   projectId: string;
   session: Session;
+  /** Who's acting: "Claude" for the built-in assistant, or an external agent's name. */
+  agentName: string;
   status(text: string, file?: string): void;
 }
 
@@ -32,7 +34,6 @@ type Def = {
 };
 
 const READ_LIMIT = 1500;
-const AGENT = "Claude";
 
 const fail = (summary: string, content: string): ToolOutcome => ({ summary, content, isError: true });
 
@@ -122,7 +123,7 @@ const DEFS: Record<string, Def> = {
         const hits = occurrences(yText(doc).toString(), input.find);
         if (hits.length !== 1) return { hits: hits.length };
         const t = createThread(doc, {
-          from: hits[0], to: hits[0] + input.find.length, author: AGENT, kind: "suggestion",
+          from: hits[0], to: hits[0] + input.find.length, author: ctx.agentName, kind: "suggestion",
           replacement: input.replace, message: `${input.reason.trim()} (for ${ctx.session.name})`,
         });
         return { hits: 1, id: t.id };
@@ -145,7 +146,7 @@ const DEFS: Record<string, Def> = {
       const result = await withDoc(ctx.projectId, input.path, ctx.session, (doc) => {
         const hits = occurrences(yText(doc).toString(), input.quote);
         if (hits.length !== 1) return { hits: hits.length };
-        const t = createThread(doc, { from: hits[0], to: hits[0] + input.quote.length, author: AGENT, message: `${input.message.trim()} (for ${ctx.session.name})` });
+        const t = createThread(doc, { from: hits[0], to: hits[0] + input.quote.length, author: ctx.agentName, message: `${input.message.trim()} (for ${ctx.session.name})` });
         return { hits: 1, id: t.id };
       });
       if (!result.id) return fail(`Couldn't place a comment in ${input.path}`, result.hits === 0 ? "Quote not found in the file." : `Quote appears ${result.hits} times; use a longer quote.`);
@@ -158,7 +159,7 @@ const DEFS: Record<string, Def> = {
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
       ctx.status("Compiling");
-      const r = await compileProject(ctx.projectId, `${AGENT} (for ${ctx.session.name})`);
+      const r = await compileProject(ctx.projectId, `${ctx.agentName} (for ${ctx.session.name})`);
       const errors = r.diagnostics.filter((d) => d.severity === "error");
       const warnings = r.diagnostics.filter((d) => d.severity === "warning");
       const fmt = (d: (typeof r.diagnostics)[number]) => `${d.file ?? "?"}${d.line ? `:${d.line}` : ""}: ${d.message}`;
@@ -200,7 +201,7 @@ const DEFS: Record<string, Def> = {
         const t: Task = {
           id: crypto.randomUUID(), title: input.title.slice(0, 200), status: "todo", order,
           assignee: input.assignee, files: input.files?.filter((f) => isTextPath(f) || f.includes(".")), notes: input.notes,
-          createdBy: `${AGENT} (for ${ctx.session.name})`, createdAt: now, updatedAt: now,
+          createdBy: `${ctx.agentName} (for ${ctx.session.name})`, createdAt: now, updatedAt: now,
         };
         tasks.set(t.id, t);
         return t;
@@ -208,9 +209,85 @@ const DEFS: Record<string, Def> = {
       return { summary: `Added task “${task.title}”`, content: `Task created (id ${task.id.slice(0, 8)}).` };
     },
   },
+
+  update_task: {
+    description: "Update a board task: claim it (assign it and move it to In progress), move it between columns, or add a note. Use the id shown by list_tasks (a prefix is enough).",
+    schema: z.object({
+      id: z.string(),
+      status: z.enum(["todo", "doing", "review", "done"]).optional(),
+      assignee: z.string().optional().describe("Member name; use your user's name to claim it"),
+      note: z.string().optional().describe("Appended to the task's notes"),
+    }),
+    async run(input: { id: string; status?: Task["status"]; assignee?: string; note?: string }, ctx) {
+      const result = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
+        const tasks = doc.getMap<Task>("tasks");
+        const matches = [...tasks.values()].filter((t) => t.id.startsWith(input.id));
+        if (matches.length !== 1) return { error: matches.length ? "That id matches several tasks; use more characters." : "No task with that id." };
+        const t = matches[0];
+        const stamp = new Date().toISOString();
+        const notes = input.note ? `${t.notes ? `${t.notes}\n\n` : ""}${input.note.trim()} (${ctx.agentName} for ${ctx.session.name}, ${stamp.slice(0, 10)})` : t.notes;
+        const next: Task = { ...t, status: input.status ?? t.status, assignee: input.assignee ?? t.assignee, notes, updatedAt: stamp };
+        tasks.set(t.id, next);
+        return { task: next };
+      });
+      if (!result.task) return fail("Couldn't update the task", result.error!);
+      const col = TASK_COLUMNS.find((c) => c.id === result.task.status)?.label;
+      return { summary: `Updated task “${result.task.title}” (${col}${result.task.assignee ? `, @${result.task.assignee}` : ""})`, content: "Task updated." };
+    },
+  },
+
+  list_comments: {
+    description: "List review threads (comments and suggested edits) with their status, location and replies. Use this to find feedback to address.",
+    schema: z.object({
+      path: z.string().optional().describe("Only this file; default: every .tex/.bib file"),
+      include_closed: z.boolean().optional().describe("Also show resolved, accepted and rejected threads"),
+    }),
+    async run(input: { path?: string; include_closed?: boolean }, ctx) {
+      const files = input.path ? [input.path] : (await textFiles(ctx.projectId)).map((f) => f.path).filter((p) => /\.(tex|bib)$/.test(p));
+      const out: string[] = [];
+      for (const path of files) {
+        checkPath(ctx.projectId, path);
+        const threads = await withDoc(ctx.projectId, path, ctx.session, (doc) => {
+          const text = yText(doc).toString();
+          return listThreads(doc).map((t) => ({ ...t, line: t.from === null ? null : lineAt(text, t.from) }));
+        });
+        for (const t of threads) {
+          if (!input.include_closed && t.status !== "open") continue;
+          const where = t.line ? `${path}:${t.line}` : `${path} (text removed)`;
+          const head = `[${t.id.slice(0, 8)}] ${t.kind}${t.status !== "open" ? ` (${t.status})` : ""} at ${where} by ${t.author}`;
+          const body = t.kind === "suggestion" ? `  replace: ${JSON.stringify(t.quote)}\n  with: ${JSON.stringify(t.replacement ?? "")}` : `  on: ${JSON.stringify(t.quote.slice(0, 200))}`;
+          const msgs = t.messages.map((m) => `  ${m.author}: ${m.text}`).join("\n");
+          out.push([head, body, msgs].filter(Boolean).join("\n"));
+        }
+      }
+      return { summary: `Checked comments${input.path ? ` in ${input.path}` : ""} (${out.length} open)`, content: out.join("\n\n") || "No open comments." };
+    },
+  },
+
+  reply_to_comment: {
+    description: "Reply to a review thread, optionally marking it resolved (e.g. after addressing the feedback). Use the id from list_comments (a prefix is enough).",
+    schema: z.object({ path: z.string(), thread_id: z.string(), message: z.string(), resolve: z.boolean().optional() }),
+    async run(input: { path: string; thread_id: string; message: string; resolve?: boolean }, ctx) {
+      checkPath(ctx.projectId, input.path);
+      const result = await withDoc(ctx.projectId, input.path, ctx.session, (doc) => {
+        const matches = [...threadsOf(doc).keys()].filter((id) => id.startsWith(input.thread_id));
+        if (matches.length !== 1) return { error: matches.length ? "Ambiguous thread id." : "No such thread in that file." };
+        reply(doc, matches[0], `${ctx.agentName} (for ${ctx.session.name})`, input.message.trim());
+        if (input.resolve) setStatus(doc, matches[0], "resolved", `${ctx.agentName} (for ${ctx.session.name})`);
+        return { id: matches[0] };
+      });
+      if (!result.id) return fail("Couldn't reply", result.error!);
+      return { summary: `${input.resolve ? "Resolved" : "Replied to"} a comment in ${input.path}`, path: input.path, threadId: result.id, content: input.resolve ? "Replied and resolved." : "Replied." };
+    },
+  },
 };
 
 export const TOOL_NAMES = Object.keys(DEFS);
+
+/** Tools for external agents (MCP): the same set, minus Anthropic server tools. */
+export function agentToolList() {
+  return Object.entries(DEFS).sort(([a], [b]) => a.localeCompare(b)).map(([name, d]) => ({ name, description: d.description, input_schema: jsonSchema(d.schema) }));
+}
 
 function jsonSchema(schema: z.ZodObject): Anthropic.Beta.BetaTool.InputSchema {
   const { $schema: _drop, ...rest } = z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;

@@ -101,7 +101,7 @@ export async function runTurn(projectId: string, chatId: string, session: Sessio
   const entry: ChatEntry = { role: "assistant", parts, at: new Date().toISOString() };
   let usage = { input: 0, output: 0, cacheRead: 0 };
 
-  const status = (s: string, file?: string) => setAgentActivity(projectId, chatId, { chatId, for: session.name, status: s, file, at: Date.now() });
+  const status = (s: string, file?: string) => setAgentActivity(projectId, chatId, { chatId, agent: "Claude", for: session.name, status: s, file, at: Date.now() });
   const addText = (delta: string) => {
     const last = parts.at(-1);
     if (last?.type === "text") last.text += delta;
@@ -189,7 +189,7 @@ export async function runTurn(projectId: string, chatId: string, session: Sessio
 
       const results = await Promise.all(toolUses.map(async (t): Promise<[Anthropic.Beta.BetaToolUseBlock, ToolOutcome]> => {
         send({ type: "tool_start", name: t.name, summary: t.name.replace(/_/g, " ") });
-        return [t, await runTool(t.name, t.input, { projectId, session, status })];
+        return [t, await runTool(t.name, t.input, { projectId, session, agentName: "Claude", status })];
       }));
       for (const [t, r] of results) {
         const step: ChatPart = { type: "tool", name: t.name, summary: r.summary, ok: !r.isError, path: r.path, threadId: r.threadId };

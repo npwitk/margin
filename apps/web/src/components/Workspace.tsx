@@ -68,9 +68,14 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   useEffect(() => save("previewTab", previewTab), [previewTab]);
   useEffect(() => { api.aiSettings().then(setAiSettings).catch(() => {}); }, []);
   const agentsMap = useYMap(collab?.agents);
-  const agentPeers = useMemo<Peer[]>(() => [...agentsMap.values()].map((a, i) => ({
-    clientId: -1 - i, user: { name: `Claude for ${a.for}`, color: "#d97757", agent: true }, file: a.file ?? null, view: "write" as const,
-  })), [agentsMap]);
+  // Agents (built-in Claude, or Claude Code / Codex via margin-mcp). Hide ones that went quiet.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(t); }, []);
+  const agentPeers = useMemo<Peer[]>(() => [...agentsMap.values()]
+    .filter((a) => now - a.at < 10 * 60_000)
+    .map((a, i) => ({
+      clientId: -1 - i, user: { name: `${a.agent ?? "Claude"} for ${a.for}`, color: "#d97757", agent: true }, file: a.file ?? null, line: undefined, view: "write" as const,
+    })), [agentsMap, now]);
   // Switching files clears the draft and selection, unless we're jumping to a specific thread.
   const pendingThread = useRef<string | null>(null);
   useEffect(() => { setDraft(null); setActiveThread(pendingThread.current); pendingThread.current = null; }, [textPath]);
@@ -537,7 +542,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           <section className="pane preview" style={{ flexBasis: `${(1 - split) * 100}%` }}>
             <div className="preview-tabs">
               <button className={previewTab === "pdf" ? "active" : ""} onClick={() => setPreviewTab("pdf")}>PDF</button>
-              <button className={previewTab === "assistant" ? "active" : ""} onClick={() => setPreviewTab("assistant")}>✦ Assistant{agentPeers.length ? <span className="live-dot" /> : null}</button>
+              <button className={previewTab === "assistant" ? "active" : ""} onClick={() => setPreviewTab("assistant")}>✦ Assistant{[...agentsMap.values()].some((x) => (x.agent ?? "Claude") === "Claude") ? <span className="live-dot" /> : null}</button>
               <button className={previewTab === "citations" ? "active" : ""} onClick={() => setPreviewTab("citations")}>Citations</button>
             </div>
             <div className="preview-body" hidden={previewTab !== "pdf"}>

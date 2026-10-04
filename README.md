@@ -2,7 +2,7 @@
 
 An open-source, AI-native LaTeX workspace for research groups. Write, compile and review papers together. Agents like Claude Code and Codex work alongside you as visible teammates.
 
-> Working name. Status: **P2 complete** (AI). Next up: P3 (external agents via MCP).
+> Working name. Status: **P3 complete** (external agents). Next up: P4 (idea → paper workflow, public launch).
 
 ## What works today (P0)
 - Projects stored as **git repos** you own; checkpoints are commits credited to each member
@@ -43,6 +43,19 @@ Claude (`claude-opus-5-5`) is built in. Bring your own key: each member adds the
 
 Refusals fall back automatically (`fallbacks: "default"`); the agent's history is append-only and prompt-cached.
 
+## Your own agents (P3)
+`packages/mcp` is **margin-mcp**, an MCP server that connects Claude Code, Codex, Cursor or any MCP client to a Margin project with the same tools as the built-in assistant: read, search, suggest edits, comment, compile, list/claim/update board tasks, and read/answer review comments. The agent shows up live for the whole group ("Claude Code for Alice"), and its edits arrive as suggestions.
+
+```sh
+# Inside a git clone of the project (URL and project are read from the remote):
+claude mcp add margin -e MARGIN_TOKEN=<token> -- npx -y margin-mcp
+# Anywhere:
+claude mcp add margin -e MARGIN_TOKEN=<token> -- npx -y margin-mcp --url https://paper.example.com --project <id>
+```
+Create the token in **Local** (the same dialog shows Codex and generic MCP config). Until it's published to npm, build it with `npm run build -w margin-mcp` and use `node packages/mcp/dist/index.js`.
+
+Under the hood, agents call `/api/projects/:id/agent/tools/:name` with `Authorization: Bearer <token>`. Scripts can use the same API.
+
 ## Run locally
 Requires Node 22+, git, and a TeX distribution with `latexmk` and `synctex` (e.g. MacTeX).
 ```sh
@@ -80,7 +93,7 @@ Before public sign-ups: per-job containers (or gVisor/Firecracker) so projects c
 ## Roadmap
 - **P1, collaboration:** ✓ live editing, presence, board, comments and suggestions, git remote, GitHub sign-in
 - **P2, AI:** ✓ assistant with tools, compile-error fixer, reviewer skills, citation checker, add by DOI · later: PDF reference library (GROBID), chat with your papers
-- **P3, external agents:** a `margin-mcp` server so Claude Code and Codex claim board tasks and edit live as "Claude for <member>"
+- **P3, external agents:** ✓ margin-mcp (Claude Code, Codex, any MCP client), token auth for the API, agent presence, task claiming, comment replies · later: publish to npm, remote MCP over HTTP
 - **P4:** idea → paper workflow, Overleaf/arXiv import, public launch, Tauri desktop app
 
 ## License

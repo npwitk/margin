@@ -9,6 +9,14 @@ import { addByDoi, checkCitations } from "./citations.ts";
 import { MODEL, SHARED_KEY, describeApiError } from "./client.ts";
 import { deleteKey, keyInfo, saveKey } from "./keys.ts";
 import { getReview, listReviews, listSkills, startReview } from "./reviewer.ts";
+import { agentToolList, runTool } from "./tools.ts";
+import { setAgentActivity } from "../collab.ts";
+import { getProject } from "../storage.ts";
+import type { Session } from "@margin/shared";
+
+/** One presence slot per member + agent, e.g. "ext-alice-claude-code". */
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "x";
+const activityKey = (s: Session) => `ext-${slug(s.name)}-${slug(s.agent ?? "agent")}`;
 
 const wrap = (err: unknown) => new HttpError(400, describeApiError(err));
 
@@ -96,6 +104,35 @@ export const aiProjectRoutes = new Hono<AppEnv>()
     } catch (err) {
       throw wrap(err);
     }
+  })
+
+  // External agents (margin-mcp): the assistant's tools over HTTP, authenticated with an access token.
+  .get("/:id/agent/tools", async (c) => {
+    await getProject(c.req.param("id"));
+    return c.json(agentToolList());
+  })
+  .post("/:id/agent/tools/:name", async (c) => {
+    const id = c.req.param("id"), name = c.req.param("name");
+    await getProject(id);
+    const { input } = await c.req.json<{ input?: unknown }>().catch(() => ({ input: undefined }));
+    const session = c.get("session");
+    const agentName = session.agent ?? "Agent";
+    const key = activityKey(session);
+    const status = (text: string, file?: string) =>
+      setAgentActivity(id, key, { chatId: key, agent: agentName, for: session.name, status: text, file, at: Date.now() });
+    status(`Using ${name.replace(/_/g, " ")}`);
+    return c.json(await runTool(name, input ?? {}, { projectId: id, session, agentName, status }));
+  })
+  // Presence for agents working in a local clone: { status, file } to show, { done: true } to clear.
+  .post("/:id/agent/activity", async (c) => {
+    const id = c.req.param("id");
+    await getProject(id);
+    const { status, file, done } = await c.req.json<{ status?: string; file?: string; done?: boolean }>().catch(() => ({} as { status?: string; file?: string; done?: boolean }));
+    const session = c.get("session");
+    const key = activityKey(session);
+    if (done) setAgentActivity(id, key, null);
+    else setAgentActivity(id, key, { chatId: key, agent: session.agent ?? "Agent", for: session.name, status: (status ?? "Working").slice(0, 120), file: file?.slice(0, 300), at: Date.now() });
+    return c.json({ ok: true });
   })
 
   // Citations

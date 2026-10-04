@@ -1,0 +1,22 @@
+{
+  "name": "margin-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that connects Claude Code, Codex and other agents to a Margin project",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "bin": {
+    "margin-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p .",
+    "test": "node --import tsx --test src/*.test.ts",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0"
+  }
+}

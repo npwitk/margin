@@ -61,6 +61,8 @@ export interface Session {
   /** GitHub login, when signed in with GitHub. */
   github?: string;
   avatar?: string;
+  /** Set when the request comes from an external agent (e.g. "Claude Code") using an access token. */
+  agent?: string;
 }
 
 export interface AuthMethods {

@@ -25,8 +25,10 @@ export function LocalDialog({ projectId, session, onClose }: { projectId: string
   const [fresh, setFresh] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [agentTab, setAgentTab] = useState<"claude" | "codex" | "other">("claude");
   const url = `${location.origin}/git/${projectId}.git`;
   const user = session.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "me";
+  const token = fresh ?? "<your-token>";
 
   const refresh = () => api.tokens().then(setTokens).catch((e) => setError(e.message));
   useEffect(() => { void refresh(); }, []);
@@ -82,6 +84,34 @@ export function LocalDialog({ projectId, session, onClose }: { projectId: string
           </div>
         </div>
       </div>
+
+      <div className="section-label tokens-label">Connect an agent (MCP)</div>
+      <p className="muted small">Give Claude Code, Codex or any MCP client the same tools Margin's assistant has. It shows up live as “Claude Code for {session.name}”, its edits arrive as suggestions, and it can claim board tasks and answer comments. Run this inside your clone (the project is detected from the git remote), or anywhere with the flags shown.</p>
+      <div className="agent-tabs">
+        <button className={agentTab === "claude" ? "active" : ""} onClick={() => setAgentTab("claude")}>Claude Code</button>
+        <button className={agentTab === "codex" ? "active" : ""} onClick={() => setAgentTab("codex")}>Codex</button>
+        <button className={agentTab === "other" ? "active" : ""} onClick={() => setAgentTab("other")}>Other</button>
+      </div>
+      {agentTab === "claude" && <CodeLine text={`claude mcp add margin -e MARGIN_TOKEN=${token} -- npx -y margin-mcp --url ${location.origin} --project ${projectId}`} />}
+      {agentTab === "codex" && (
+        <pre className="code-block">{`# ~/.codex/config.toml
+[mcp_servers.margin]
+command = "npx"
+args = ["-y", "margin-mcp", "--url", "${location.origin}", "--project", "${projectId}"]
+env = { MARGIN_TOKEN = "${token}" }`}</pre>
+      )}
+      {agentTab === "other" && (
+        <pre className="code-block">{`{
+  "mcpServers": {
+    "margin": {
+      "command": "npx",
+      "args": ["-y", "margin-mcp", "--url", "${location.origin}", "--project", "${projectId}"],
+      "env": { "MARGIN_TOKEN": "${token}" }
+    }
+  }
+}`}</pre>
+      )}
+      <p className="muted small">Until margin-mcp is on npm, use <code>node &lt;margin repo&gt;/packages/mcp/dist/index.js</code> in place of <code>npx -y margin-mcp</code>.</p>
 
       {error && <p className="error small">{error}</p>}
       <div className="section-label tokens-label">Your tokens</div>

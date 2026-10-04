@@ -52,6 +52,8 @@ export type ChatEvent =
 /** An agent currently working in the project (shown next to human presence). */
 export interface AgentActivity {
   chatId: string;
+  /** Display name, e.g. "Claude" (built in), "Claude Code", "Codex". */
+  agent?: string;
   /** The member the agent is working for. */
   for: string;
   status: string;

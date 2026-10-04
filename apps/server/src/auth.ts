@@ -3,6 +3,7 @@ import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import type { AuthMethods, Session } from "@margin/shared";
 import { GITHUB, OPEN_ACCESS, PASSWORD, PUBLIC_URL, SECRET, SECURE_COOKIES } from "./config.ts";
+import { verifyToken } from "./tokens.ts";
 
 export type AppEnv = { Variables: { session: Session } };
 
@@ -27,7 +28,21 @@ async function readSession(c: Parameters<MiddlewareHandler>[0]): Promise<Session
   }
 }
 
+/** An agent's display name from the x-margin-agent header ("Claude Code", "Codex"...). */
+function agentName(raw: string | undefined) {
+  const name = (raw ?? "").replace(/[^\w .()-]/g, "").trim().slice(0, 40);
+  return name || "Agent";
+}
+
 export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
+  // Agents and scripts authenticate with a personal access token instead of the cookie.
+  const bearer = c.req.header("authorization")?.match(/^Bearer\s+(mgn_\S+)$/)?.[1];
+  if (bearer) {
+    const member = await verifyToken(bearer);
+    if (!member) return c.json({ error: "Invalid access token" }, 401);
+    c.set("session", { name: member, agent: agentName(c.req.header("x-margin-agent")) });
+    return next();
+  }
   const session = await readSession(c);
   if (!session) return c.json({ error: "unauthorized" }, 401);
   c.set("session", session);
