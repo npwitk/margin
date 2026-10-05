@@ -956,3 +956,61 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
 .assignee-menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 8px; border-radius: 5px; text-align: left; }
 .assignee-menu button:hover { background: var(--hover); }
 .assignee-menu button.on { color: var(--accent); }
+
+/* Task comments */
+.task-comments { margin-top: 6px; }
+.comments-head { display: flex; align-items: center; }
+.comments-head .task-section-label { margin-bottom: 10px; }
+.link-btn { font-size: 12px; color: var(--text-muted); font-weight: 500; padding: 2px 0; }
+.link-btn:hover { color: var(--text); text-decoration: underline; }
+.ok-text { color: var(--ok); }
+.comment-composer { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px; }
+.comment-placeholder {
+  width: 100%; height: 36px; padding: 0 12px; text-align: left; border-radius: 6px;
+  border: 1px solid var(--border-strong); color: var(--text-faint); background: var(--bg);
+}
+.comment-placeholder:hover { border-color: var(--text-faint); }
+.md-edit.compact .md-frame .cm-editor { min-height: 64px; }
+.md-edit.compact .md-tool-4, .md-edit.compact .md-tool-5, .md-edit.compact .md-tool-6, .md-edit.compact .md-tool-7,
+.md-edit.compact .md-tool-17 { display: none; }
+.thread { position: relative; padding: 10px 12px 8px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.thread.is-resolved { opacity: 0.85; }
+.thread-tools { position: absolute; top: 8px; right: 10px; display: flex; gap: 8px; align-items: center; }
+.resolve-btn {
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 11px;
+  font-size: 11.5px; font-weight: 500; color: var(--text-muted); border: 1px solid var(--border-strong); background: var(--bg);
+  opacity: 0; transition: opacity 0.1s;
+}
+.thread:hover .resolve-btn, .resolve-btn:focus-visible { opacity: 1; }
+.resolve-btn:hover { color: var(--ok); border-color: var(--ok); }
+.resolved-collapsed { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12.5px; }
+.comment { display: flex; gap: 10px; align-items: flex-start; }
+.comment + .comment { margin-top: 10px; }
+.comment.deleted { padding: 2px 0 2px 32px; }
+.comment-main { flex: 1; min-width: 0; }
+.comment-head { display: flex; align-items: baseline; gap: 6px; padding-right: 80px; }
+.comment-author { font-weight: 600; font-size: 13px; }
+.comment-body { margin-top: 2px; font-size: 13.5px; }
+.comment-body code { font: 0.9em var(--font-mono); background: var(--hover); padding: 1px 4px; border-radius: 4px; }
+.mention { color: var(--accent); background: var(--accent-soft); padding: 0 3px; border-radius: 3px; font-weight: 500; }
+.comment-actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+.replies { margin: 10px 0 0 16px; padding-left: 16px; border-left: 2px solid var(--border); }
+.reply-box { padding-top: 2px; }
+.reactions { position: relative; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.reaction {
+  display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 7px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--bg); font-size: 13px; color: var(--text-muted);
+}
+.reaction:hover { border-color: var(--border-strong); }
+.reaction.mine { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.reaction-n { font-size: 11.5px; font-weight: 600; }
+.reaction.add { color: var(--text-faint); }
+.reaction.add:hover { color: var(--text); }
+.reaction-picker {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 6; display: flex; gap: 2px; padding: 4px;
+  background: var(--raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+}
+.reaction-picker button { width: 32px; height: 32px; border-radius: 7px; font-size: 18px; }
+.reaction-picker button:hover { background: var(--hover); transform: scale(1.12); }
+.reaction-picker button.mine { background: var(--accent-soft); }
+.comment-count { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--text-muted); }

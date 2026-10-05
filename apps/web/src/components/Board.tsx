@@ -8,6 +8,7 @@ import { Modal } from "./Dialog.tsx";
 import { Avatar } from "./Presence.tsx";
 import { Icon } from "./Icon.tsx";
 import { MarkdownField } from "./MarkdownField.tsx";
+import { TaskComments, deleteTaskComments, openThreadCounts, useTaskComments } from "./TaskComments.tsx";
 
 interface Props {
   collab: ProjectCollab;
@@ -54,6 +55,8 @@ const Label = ({ text, onRemove }: { text: string; onRemove?(): void }) => (
 
 export function Board({ collab, session, files, peers, projectName, onOpenFile }: Props) {
   const tasksMap = useYMap(collab.tasks);
+  const commentsMap = useTaskComments(collab);
+  const threadCounts = useMemo(() => openThreadCounts(commentsMap), [commentsMap]);
   const membersMap = useYMap(collab.members);
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState<TaskStatus | null>(null);
@@ -202,7 +205,8 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
                         <span className={`task-key ${t.status === "done" ? "done" : ""}`}>{keyOf(t)}</span>
                         <PriorityIcon priority={t.priority} />
                         {t.due && <span className={`due ${overdue ? "overdue" : ""}`} title={overdue ? "Overdue" : "Due"}><Icon name="calendar" size={11} />{new Date(`${t.due}T00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
-                        {!!t.notes?.trim() && <span className="muted" title="Has a description"><Icon name="comment" size={12} /></span>}
+                        {!!t.notes?.trim() && <span className="muted" title="Has a description"><Icon name="lines" size={12} /></span>}
+                        {!!threadCounts.get(t.id) && <span className="comment-count" title={`${threadCounts.get(t.id)} open comment thread${threadCounts.get(t.id) === 1 ? "" : "s"}`}><Icon name="comment" size={12} />{threadCounts.get(t.id)}</span>}
                         <div className="spacer" />
                         {liveAssignee(t) && <span className="live" title={`${liveAssignee(t)} is in this file now`}>live</span>}
                         {assigneesOf(t).length
@@ -239,7 +243,9 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
           files={files.filter((f) => f.type === "file").map((f) => f.path)}
           onOpenFile={(f) => { setEditing(null); onOpenFile(f); }}
           onChange={(patch) => { const cur = tasksMap.get(editingTask.id); if (cur) update(cur, patch); }}
-          onDelete={() => { collab.tasks.delete(editingTask.id); setEditing(null); }}
+          onDelete={() => { deleteTaskComments(collab, editingTask.id); collab.tasks.delete(editingTask.id); setEditing(null); }}
+          collab={collab}
+          session={session}
           onClose={() => setEditing(null)}
         />
       )}
@@ -247,7 +253,9 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
   );
 }
 
-function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChange, onDelete, onClose }: {
+function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChange, onDelete, onClose, collab, session }: {
+  collab: ProjectCollab;
+  session: Session;
   task: Task;
   taskKey: string;
   members: string[];
@@ -307,6 +315,8 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
               {files.filter((f) => !linked.includes(f)).map((f) => <option key={f} value={f}>{f}</option>)}
             </select>
           </div>
+
+          <TaskComments taskId={task.id} collab={collab} session={session} members={members} />
         </div>
 
         <aside className="task-side">

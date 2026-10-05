@@ -7,7 +7,7 @@ import { Hocuspocus, type Document } from "@hocuspocus/server";
 import { parseSigned } from "hono/utils/cookie";
 import { WebSocketServer } from "ws";
 import * as Y from "yjs";
-import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type RoomEvents, type Session, type Task } from "@margin/shared";
+import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type RoomEvents, type Session, type Task, type TaskComment } from "@margin/shared";
 import { DATA_DIR, SECRET } from "./config.ts";
 import { HttpError, projectDir, resolvePath } from "./storage.ts";
 import { canAccess } from "./access.ts";
@@ -87,7 +87,8 @@ async function persist(name: string, doc: Y.Doc, { withState = true } = {}) {
   const t = target(name);
   if (paused.has(t.projectId)) return;
   if (t.room) {
-    const json = JSON.stringify({ tasks: boardFromDoc(doc) }, null, 2) + "\n";
+    const comments = [...doc.getMap<TaskComment>("taskComments").values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const json = JSON.stringify({ tasks: boardFromDoc(doc), ...(comments.length ? { comments } : {}) }, null, 2) + "\n";
     if ((await readFile(t.file, "utf8").catch(() => "")) !== json) await writeAtomic(t.file, json);
   } else {
     // Renamed/deleted while open: don't resurrect it.
@@ -137,8 +138,12 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
     if (t.room) {
       const tasks = document.getMap<Task>("tasks");
       if (!state && tasks.size === 0) {
-        const board = await readFile(t.file, "utf8").then((s) => JSON.parse(s) as { tasks: Task[] }).catch(() => null);
-        document.transact(() => board?.tasks?.forEach((task) => tasks.set(task.id, task)));
+        const board = await readFile(t.file, "utf8").then((s) => JSON.parse(s) as { tasks: Task[]; comments?: TaskComment[] }).catch(() => null);
+        const comments = document.getMap<TaskComment>("taskComments");
+        document.transact(() => {
+          board?.tasks?.forEach((task) => tasks.set(task.id, task));
+          board?.comments?.forEach((c) => comments.set(c.id, c));
+        });
       }
     } else {
       const disk = await readFile(t.file, "utf8");

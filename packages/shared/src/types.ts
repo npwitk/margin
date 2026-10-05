@@ -142,6 +142,27 @@ export const assigneesOf = (t: Pick<Task, "assignee" | "assignees">): string[] =
 /** Patch that sets the assignee list and keeps `assignee` in step. */
 export const withAssignees = (names: string[]): Pick<Task, "assignee" | "assignees"> => ({ assignees: names, assignee: names[0] });
 
+/** A comment on a board task. Top-level comments start threads; replies point at their thread. */
+export interface TaskComment {
+  id: string;
+  taskId: string;
+  /** Set on replies: the thread's first comment. */
+  parentId?: string;
+  author: string;
+  /** Markdown. */
+  body: string;
+  createdAt: string;
+  editedAt?: string;
+  /** Emoji → names of who reacted. */
+  reactions?: Record<string, string[]>;
+  /** Threads only. */
+  resolved?: { by: string; at: string };
+  /** Deleted, but kept so replies still have their thread. */
+  deleted?: boolean;
+}
+
+export const REACTIONS = ["👍", "🎉", "❤️", "👀", "🚀", "✅", "😄", "🙏"];
+
 export type TaskPriority = "highest" | "high" | "medium" | "low" | "lowest";
 export const TASK_PRIORITIES: { id: TaskPriority; label: string }[] = [
   { id: "highest", label: "Highest" }, { id: "high", label: "High" }, { id: "medium", label: "Medium" }, { id: "low", label: "Low" }, { id: "lowest", label: "Lowest" },

@@ -61,7 +61,9 @@ const TOOLS: (["sep"] | [label: string, title: string, cmd: Cmd])[] = [
   ["—", "Divider", (v) => insertText(v, "\n---\n")],
 ];
 
-function MarkdownEditor({ initial, placeholder, onSave, onCancel }: { initial: string; placeholder: string; onSave(v: string): void; onCancel(): void }) {
+export function MarkdownEditor({ initial, placeholder, onSave, onCancel, saveLabel = "Save", compact }: {
+  initial: string; placeholder: string; onSave(v: string): void; onCancel(): void; saveLabel?: string; compact?: boolean;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const cb = useRef({ onSave, onCancel });
@@ -75,7 +77,7 @@ function MarkdownEditor({ initial, placeholder, onSave, onCancel }: { initial: s
         extensions: [
           history(),
           Prec.highest(keymap.of([
-            { key: "Mod-Enter", run: (ed) => { cb.current.onSave(ed.state.doc.toString()); return true; } },
+            { key: "Mod-Enter", run: (ed) => { const v = ed.state.doc.toString(); if (v.trim() || !compact) cb.current.onSave(v); return true; } },
             { key: "Escape", run: () => { cb.current.onCancel(); return true; } },
           ])),
           keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -92,7 +94,7 @@ function MarkdownEditor({ initial, placeholder, onSave, onCancel }: { initial: s
 
   const run = (cmd: Cmd) => () => { if (view.current) cmd(view.current); };
   return (
-    <div className="md-edit">
+    <div className={`md-edit ${compact ? "compact" : ""}`}>
       <div className="md-toolbar" onMouseDown={(e) => e.preventDefault()}>
         {TOOLS.map((t, i) => t[0] === "sep"
           ? <span key={i} className="md-sep" />
@@ -100,9 +102,9 @@ function MarkdownEditor({ initial, placeholder, onSave, onCancel }: { initial: s
       </div>
       <div className="md-frame" ref={host} />
       <div className="md-actions">
-        <button className="btn primary tight" onClick={() => view.current && onSave(view.current.state.doc.toString())}>Save</button>
+        <button className="btn primary tight" onClick={() => { const v = view.current?.state.doc.toString() ?? ""; if (v.trim() || !compact) onSave(v); }}>{saveLabel}</button>
         <button className="btn ghost tight" onClick={onCancel}>Cancel</button>
-        <span className="muted small">⌘Enter to save · Esc to cancel · Markdown and $math$ supported</span>
+        <span className="muted small">⌘Enter to {saveLabel.toLowerCase()} · Esc to cancel{compact ? "" : " · Markdown and $math$ supported"}</span>
       </div>
     </div>
   );
