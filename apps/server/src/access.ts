@@ -106,10 +106,11 @@ export async function removeMember(projectId: string, s: Session, id: string) {
   const self = id === memberId(s);
   if (!self) await requireOwner(a, s);
   const target = a.members.find((m) => m.id === id);
-  if (!target) return;
+  if (!target) return null;
   if (target.role === "owner" && a.members.filter((m) => m.role === "owner").length === 1) throw new HttpError(400, "A project needs at least one owner");
   a.members = a.members.filter((m) => m.id !== id);
   await store(projectId, a);
+  return target;
 }
 
 export async function setRole(projectId: string, s: Session, id: string, role: Member["role"]) {

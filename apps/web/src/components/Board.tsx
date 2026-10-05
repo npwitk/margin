@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { TASK_COLUMNS, TASK_PRIORITIES, assigneesOf, withAssignees, type FileEntry, type Session, type Task, type TaskPriority, type TaskStatus } from "@margin/shared";
+import { api } from "../lib/api.ts";
 import { rememberAvatars } from "../lib/avatars.ts";
 import { useYMap, type Peer, type ProjectCollab } from "../lib/collab.ts";
 import { relativeTime } from "../lib/time.ts";
@@ -74,11 +75,19 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
   const keyOf = (t: Task) => `${prefix}-${numbers.get(t.id) ?? "?"}`;
 
   const tasks = useMemo(() => [...tasksMap.values()].filter((t) => !mine || assigneesOf(t).includes(session.name)), [tasksMap, mine, session.name]);
+  // The paper's members (from Share), not everyone who ever opened it, so people who were removed disappear.
+  const [projectMembers, setProjectMembers] = useState<string[] | null>(null);
+  useEffect(() => {
+    api.access(collab.projectId).then((a) => {
+      setProjectMembers(a.members.map((m) => m.name));
+      rememberAvatars(a.members.map((m) => [m.name, m.avatar]));
+    }).catch(() => setProjectMembers(null));
+  }, [collab.projectId]);
   const members = useMemo(() => {
-    const names = new Set([session.name, ...membersMap.keys(), ...peers.filter((p) => !p.user.agent).map((p) => p.user.name)]);
+    const names = new Set([session.name, ...(projectMembers ?? [...membersMap.keys()]), ...peers.filter((p) => !p.user.agent).map((p) => p.user.name)]);
     [...tasksMap.values()].forEach((t) => assigneesOf(t).forEach((a) => names.add(a)));
     return [...names].sort();
-  }, [membersMap, peers, tasksMap, session.name]);
+  }, [projectMembers, membersMap, peers, tasksMap, session.name]);
   const allLabels = useMemo(() => [...new Set([...tasksMap.values()].flatMap((t) => t.labels ?? []))].sort(), [tasksMap]);
 
   const column = (status: TaskStatus) => tasks.filter((t) => t.status === status).sort((a, b) => a.order - b.order);

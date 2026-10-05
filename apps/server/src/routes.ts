@@ -10,7 +10,7 @@ import {
 } from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
 import { compileProject, compileWorker } from "./compile.ts";
-import { emit, flushProject, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
+import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
 import { checkpoint, history, withGitLock } from "./git.ts";
 import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
@@ -284,7 +284,11 @@ export const projectRoutes = new Hono<AppEnv>()
     await joinWithInvite(c.req.param("id"), c.get("session"), token ?? "");
     return c.json(await getProject(c.req.param("id")));
   })
-  .delete("/:id/members/:member", async (c) => { await removeMember(c.req.param("id"), c.get("session"), decodeURIComponent(c.req.param("member"))); return c.json({ ok: true }); })
+  .delete("/:id/members/:member", async (c) => {
+    const gone = await removeMember(c.req.param("id"), c.get("session"), decodeURIComponent(c.req.param("member")));
+    if (gone) await forgetBoardMember(c.req.param("id"), gone.name, c.get("session"));
+    return c.json({ ok: true });
+  })
   .patch("/:id/members/:member", async (c) => {
     const { role } = await c.req.json<{ role?: "owner" | "editor" }>();
     if (role !== "owner" && role !== "editor") throw new HttpError(400, "Role must be owner or editor");

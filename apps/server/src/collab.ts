@@ -212,6 +212,23 @@ export async function resumeProject(projectId: string) {
   await flushProject(projectId);
 }
 
+/**
+ * Someone left a project: drop them from the board's people list and from
+ * task assignees, so the team strip and pickers stop showing them.
+ */
+export async function forgetBoardMember(projectId: string, name: string, session: Session) {
+  await withDoc(projectId, ROOM, session, (doc) => {
+    doc.getMap("members").delete(name);
+    const tasks = doc.getMap<Task>("tasks");
+    for (const [id, t] of tasks) {
+      const people = t.assignees?.length ? t.assignees : t.assignee ? [t.assignee] : [];
+      if (!people.includes(name)) continue;
+      const rest = people.filter((p) => p !== name);
+      tasks.set(id, { ...t, assignees: rest, assignee: rest[0], updatedAt: new Date().toISOString() });
+    }
+  });
+}
+
 /** The live document for a project path (a text file, or ROOM for the board), if open. */
 export function liveDoc(projectId: string, rel: string): Y.Doc | undefined {
   return hocuspocus.documents.get(docName(projectId, rel));
