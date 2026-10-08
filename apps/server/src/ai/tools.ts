@@ -1,7 +1,8 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { ROOM, TASK_COLUMNS, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
-import { withDoc } from "../collab.ts";
+import { emit, withDoc } from "../collab.ts";
+import { createDocument, listDocuments } from "../documents.ts";
 import { compileProject } from "../compile.ts";
 import { getProject, listFiles, resolvePath } from "../storage.ts";
 import { textFiles, textOf } from "./paper.ts";
@@ -50,11 +51,12 @@ function occurrences(text: string, needle: string) {
 
 const DEFS: Record<string, Def> = {
   list_files: {
-    description: "List every file in the project with its size. Marks the main .tex file.",
+    description: "List every file in the project with its size. Marks document roots (.tex files with \\documentclass) and the default document.",
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
-      const [files, project] = await Promise.all([listFiles(ctx.projectId), getProject(ctx.projectId)]);
-      const lines = files.map((f) => (f.type === "dir" ? `${f.path}/` : `${f.path} (${f.size} B)${f.path === project.mainFile ? " [main]" : ""}`));
+      const [files, project, docs] = await Promise.all([listFiles(ctx.projectId), getProject(ctx.projectId), listDocuments(ctx.projectId)]);
+      const roots = new Set(docs.map((d) => d.path));
+      const lines = files.map((f) => (f.type === "dir" ? `${f.path}/` : `${f.path} (${f.size} B)${f.path === project.mainFile ? " [default document]" : roots.has(f.path) ? " [document]" : ""}`));
       return { summary: "Listed project files", content: lines.join("\n") || "(empty project)" };
     },
   },
@@ -154,12 +156,42 @@ const DEFS: Record<string, Def> = {
     },
   },
 
-  compile: {
-    description: "Compile the paper with LaTeX (including everyone's latest edits) and return errors and warnings.",
+  list_documents: {
+    description: "List the LaTeX documents in this project (paper, slides, letters…): each root .tex file with its title, document class and engine, and which one is the default.",
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
-      ctx.status("Compiling");
-      const r = await compileProject(ctx.projectId, `${ctx.agentName} (for ${ctx.session.name})`);
+      const docs = await listDocuments(ctx.projectId);
+      const lines = docs.map((d) => `${d.path}: "${d.title}" (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}${d.hasPdf ? "" : " (not compiled yet)"}`);
+      return { summary: `Listed ${docs.length} document${docs.length === 1 ? "" : "s"}`, content: lines.join("\n") || "(no documents)" };
+    },
+  },
+
+  create_document: {
+    description: "Create a new LaTeX document in the project (slides, a cover letter, a rebuttal, a poster, a supplement…). Either pick a template or pass the full source as content. It goes next to the default document unless you give a path, so it can use the project's .bib, macros and figures (LaTeX here can't read ../ paths). Compile it afterwards to check it builds.",
+    schema: z.object({
+      title: z.string().describe("Human title, e.g. \"Rebuttal for NeurIPS\""),
+      template: z.enum(["article", "beamer", "letter", "poster", "ieee", "blank"]).optional().describe("Starting point when no content is given"),
+      path: z.string().optional().describe("Where to create it, e.g. \"slides.tex\" or \"LaTeX/rebuttal.tex\". Defaults to a file named after the title next to the default document."),
+      content: z.string().optional().describe("Complete LaTeX source including \\documentclass; replaces the template"),
+    }),
+    async run(input: { title: string; template?: string; path?: string; content?: string }, ctx) {
+      ctx.status("Creating a document", input.path);
+      try {
+        const path = await createDocument(ctx.projectId, input);
+        emit(ctx.projectId, "filesVersion", Date.now());
+        return { summary: `Created ${path}`, path, content: `Created ${path}. Use compile with document "${path}" to build it.` };
+      } catch (err) {
+        return fail("Couldn't create the document", (err as Error).message);
+      }
+    },
+  },
+
+  compile: {
+    description: "Compile a LaTeX document (including everyone's latest edits) and return errors and warnings. Compiles the default document unless you name one.",
+    schema: z.object({ document: z.string().optional().describe("Path of the document to compile, e.g. \"slides.tex\"; see list_documents") }),
+    async run(input: { document?: string }, ctx) {
+      ctx.status("Compiling", input.document);
+      const r = await compileProject(ctx.projectId, `${ctx.agentName} (for ${ctx.session.name})`, input.document);
       const errors = r.diagnostics.filter((d) => d.severity === "error");
       const warnings = r.diagnostics.filter((d) => d.severity === "warning");
       const fmt = (d: (typeof r.diagnostics)[number]) => `${d.file ?? "?"}${d.line ? `:${d.line}` : ""}: ${d.message}`;
@@ -168,7 +200,7 @@ const DEFS: Record<string, Def> = {
         errors.length ? `Errors:\n${errors.slice(0, 15).map(fmt).join("\n")}` : "",
         warnings.length ? `Warnings (${warnings.length}):\n${warnings.slice(0, 15).map(fmt).join("\n")}` : "",
       ].filter(Boolean).join("\n\n");
-      return { summary: r.ok ? `Compiled (${warnings.length} warnings)` : `Compiled: ${errors.length} error${errors.length === 1 ? "" : "s"}`, content };
+      return { summary: r.ok ? `Compiled ${r.doc} (${warnings.length} warnings)` : `Compiled ${r.doc}: ${errors.length} error${errors.length === 1 ? "" : "s"}`, content };
     },
   },
 

@@ -19,6 +19,8 @@ interface Props {
   onOpenSuggestion(path: string, threadId?: string): void;
   onOpenFile(path: string, review?: boolean): void;
   onCreateToken(): void;
+  /** The document the person is compiling/viewing, so agents know the context. */
+  doc?: string;
 }
 
 const STARTERS = [
@@ -55,14 +57,14 @@ export function AssistantPanel(props: Props) {
         {connect.devices.length > 0 && <span className="muted small">{connect.devices.length} computer{connect.devices.length > 1 ? "s" : ""} connected</span>}
       </div>
       {source === "setup" ? <ConnectSetup onCreateToken={props.onCreateToken} />
-        : choice ? <ConnectPanel connect={connect} device={choice.device} agentId={choice.agent.id} onOpenFile={props.onOpenFile} initialThreadId={focusThread}
+        : choice ? <ConnectPanel connect={connect} device={choice.device} agentId={choice.agent.id} onOpenFile={props.onOpenFile} initialThreadId={focusThread} doc={props.doc}
             onPickAgent={(d, a, t) => { setFocusThread(t); setSource(`${d}|${a}`); }} />
         : <MarginAssistant {...props} />}
     </div>
   );
 }
 
-function MarginAssistant({ projectId, session, settings, request, onOpenSettings, onOpenSuggestion }: Props) {
+function MarginAssistant({ projectId, session, settings, request, onOpenSettings, onOpenSuggestion, doc }: Props) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [chat, setChat] = useState<Chat | null>(null);
   const [live, setLive] = useState<ChatEntry | null>(null);
@@ -105,7 +107,7 @@ function MarginAssistant({ projectId, session, settings, request, onOpenSettings
           entry.error = e.message;
         }
         setLive({ ...entry, parts: [...parts] });
-      });
+      }, doc);
       setChat(await api.chat(projectId, target.id));
     } catch (err) {
       setError((err as Error).message);

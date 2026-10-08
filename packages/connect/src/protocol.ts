@@ -84,7 +84,7 @@ export interface AgentThread {
 
 export type ConnectCommand =
   | { kind: "start"; threadId: string; projectId: string; agentId: AgentId; mode: ApplyMode; handoff?: string; readonly?: boolean }
-  | { kind: "prompt"; threadId: string; text: string; by: string }
+  | { kind: "prompt"; threadId: string; text: string; by: string; /** The document the person is viewing. */ doc?: string }
   | { kind: "cancel"; threadId: string }
   | { kind: "permission"; threadId: string; requestId: string; optionId: string | null }
   | { kind: "set_apply_mode"; threadId: string; mode: ApplyMode }

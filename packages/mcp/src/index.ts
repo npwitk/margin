@@ -13,7 +13,9 @@ import { loadConfig } from "./config.js";
 
 const VERSION = "0.1.0";
 
-const INSTRUCTIONS = `This connects you to a Margin project: a LaTeX paper that several co-authors edit live in their browsers.
+const INSTRUCTIONS = `This connects you to a Margin project: LaTeX documents (a paper, and maybe slides, letters, a rebuttal…) that several co-authors edit live in their browsers.
+
+- list_documents shows every document; compile takes the document to build; create_document starts a new one next to the paper so it can reuse the .bib, macros and figures.
 
 - Changes you propose with propose_edit appear as suggestions in the authors' editors for them to accept; add_comment leaves a note. Read a file before suggesting edits, and copy \`find\` text exactly.
 - If you're working in a local git clone, you can also edit files directly and \`git push\`; pushes merge with the authors' live edits. Prefer suggestions for prose the authors should review.

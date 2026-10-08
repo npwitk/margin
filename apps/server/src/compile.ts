@@ -1,7 +1,8 @@
 import type { CompileResult } from "@margin/shared";
 import { emit, flushProject } from "./collab.ts";
 import { COMPILE_TOKEN, COMPILE_URL } from "./config.ts";
-import { getProject, syncWorkDir, touchProject } from "./storage.ts";
+import { resolveDocument } from "./documents.ts";
+import { syncWorkDir, touchProject } from "./storage.ts";
 
 export async function compileWorker(pathAndQuery: string, init?: RequestInit) {
   const res = await fetch(`${COMPILE_URL}${pathAndQuery}`, {
@@ -14,16 +15,16 @@ export async function compileWorker(pathAndQuery: string, init?: RequestInit) {
   return body;
 }
 
-/** Save live edits, compile in the sandbox, and tell everyone in the project. */
-export async function compileProject(id: string, by: string): Promise<CompileResult> {
-  const project = await getProject(id);
+/** Save live edits, compile one document in the sandbox (the default one unless `doc` says otherwise), and tell everyone. */
+export async function compileProject(id: string, by: string, doc?: string | null): Promise<CompileResult & { doc: string }> {
+  const target = await resolveDocument(id, doc);
   await flushProject(id);
   await syncWorkDir(id);
   const result = (await compileWorker("/compile", {
     method: "POST",
-    body: JSON.stringify({ projectId: id, mainFile: project.mainFile, engine: project.engine }),
+    body: JSON.stringify({ projectId: id, mainFile: target.path, engine: target.engine }),
   })) as CompileResult;
   await touchProject(id);
-  emit(id, "lastCompile", { by, at: Date.now(), ok: result.ok });
-  return result;
+  emit(id, "lastCompile", { by, at: Date.now(), ok: result.ok, doc: target.path });
+  return { ...result, doc: target.path };
 }

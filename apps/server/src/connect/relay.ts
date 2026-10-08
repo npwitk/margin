@@ -232,7 +232,10 @@ export function handleUi(ws: WebSocket, session: Session) {
         }
         record(t, { kind: "user", by: ui.session.name, text });
         if (t.title.startsWith("New ")) threads.set(t.id, { ...threads.get(t.id)!, title: text.replace(/\s+/g, " ").slice(0, 60) });
-        const r = await command(bridge, { kind: "prompt", threadId: t.id, text, by: ui.session.name }, 15_000);
+        // Tell the agent which document the person is looking at (not shown in the transcript).
+        const doc = typeof cmd.doc === "string" && /^[^\0]{1,300}\.tex$/.test(cmd.doc) ? cmd.doc : undefined;
+        const sent = doc ? `(${ui.session.name} is viewing the document ${doc}.)\n${text}` : text;
+        const r = await command(bridge, { kind: "prompt", threadId: t.id, text: sent, by: ui.session.name }, 15_000);
         if (!r.ok) record(threads.get(t.id)!, { kind: "error", message: r.error ?? "The agent didn't accept the message" });
         return reply(msg.reqId, r.ok, r.error);
       }

@@ -18,7 +18,7 @@ interface Props {
 
 type Zoom = "fit" | number;
 const ZOOM_STEPS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
-const MIN_ZOOM = 0.25, MAX_ZOOM = 5;
+const MIN_ZOOM = 0.05, MAX_ZOOM = 5;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
 export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
@@ -56,7 +56,8 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
     const token = ++renderToken.current;
     const first = await doc.getPage(1);
     const base = first.getViewport({ scale: 1 });
-    const s = zoom === "fit" ? Math.max(0.3, (scroll.clientWidth - 32) / base.width) : zoom;
+    // Posters (A0) need far less than 30% to fit the pane.
+    const s = zoom === "fit" ? Math.max(0.05, (scroll.clientWidth - 32) / base.width) : zoom;
     const dpr = window.devicePixelRatio || 1;
 
     const fragment = document.createDocumentFragment();

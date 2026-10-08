@@ -166,7 +166,9 @@ export class AgentRun {
 function context(title: string, agent: string, mode: ApplyMode) {
   return `[Margin] You're working in a local copy of the Margin project "${title}", a LaTeX paper that co-authors edit live in their browsers. ` +
     `Files you change here are synced into the shared paper ${mode === "edit" ? "as direct edits everyone sees immediately" : "as suggestions the authors review and accept"}, merged with their latest edits. ` +
-    `Keep changes focused, don't push with git, and use the "margin" MCP tools for the board, review comments and compiling the shared paper. You are ${agent}.`;
+    `The project can hold several LaTeX documents (the paper, slides, letters, a rebuttal…): any .tex file with a \\documentclass. The person may say which one they're viewing. ` +
+    `To make a new document, create a .tex file next to the default document (LaTeX here can't read ../ paths, so that's how it can reuse the project's .bib, macros and figures), or use the margin create_document tool; read the paper first when the new document is about it, and reuse its \\cite keys. ` +
+    `Keep changes focused, don't push with git, and use the "margin" MCP tools for the board, review comments, list_documents and compile (pass the document to build). You are ${agent}.`;
 }
 
 function readonlyContext(title: string, agent: string) {

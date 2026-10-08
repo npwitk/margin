@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AiSettings, Project, ReviewIssue, ReviewSkill } from "@margin/shared";
+import type { AiSettings, DocumentInfo, Project, ReviewIssue, ReviewSkill } from "@margin/shared";
 import { api, type StoredReview } from "../lib/api.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Icon, Spinner } from "./Icon.tsx";
@@ -14,11 +14,16 @@ interface Props {
   onOpenSettings(): void;
   onOpen(path: string, line?: number): void;
   notify(msg: string): void;
+  /** Documents in the project, and the one being compiled (reviewed by default). */
+  docs?: DocumentInfo[];
+  activeDoc?: string;
 }
 
 const READINESS: Record<string, string> = { "not ready": "Not ready", "major revision": "Major revision", "minor revision": "Minor revision", ready: "Ready to submit" };
 
-export function ReviewView({ project, settings, onProjectChange, onOpenSettings, onOpen, notify }: Props) {
+export function ReviewView({ project, settings, onProjectChange, onOpenSettings, onOpen, notify, docs = [], activeDoc }: Props) {
+  const [doc, setDoc] = useState(activeDoc ?? project.mainFile);
+  useEffect(() => { if (activeDoc) setDoc(activeDoc); }, [activeDoc]);
   const [skills, setSkills] = useState<ReviewSkill[]>([]);
   const [skill, setSkill] = useState("general");
   const [goal, setGoal] = useState(project.goal ?? "");
@@ -65,7 +70,7 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
   const run = async () => {
     try {
       await saveGoal();
-      const r = await api.startReview(project.id, skill, goal, runner ? { deviceId: runner.deviceId, agentId: runner.agentId } : undefined);
+      const r = await api.startReview(project.id, skill, goal, runner ? { deviceId: runner.deviceId, agentId: runner.agentId } : undefined, doc);
       setSelected(r.id);
       await refresh();
     } catch (err) {
@@ -92,6 +97,14 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
     <div className="review-view">
       <aside className="review-side">
         <div className="card">
+          {docs.length > 1 && (
+            <>
+              <label className="field-label">Document</label>
+              <select value={doc} onChange={(e) => setDoc(e.target.value)}>
+                {docs.map((d) => <option key={d.path} value={d.path}>{d.title} ({d.path})</option>)}
+              </select>
+            </>
+          )}
           <label className="field-label">Publishing goal</label>
           <input className="input" placeholder="e.g. NeurIPS 2027 main track, Q1 journal, MSc thesis" value={goal} onChange={(e) => setGoal(e.target.value)} onBlur={() => void saveGoal()} />
           <label className="field-label">Review rubric</label>

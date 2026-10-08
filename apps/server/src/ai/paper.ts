@@ -19,8 +19,9 @@ export async function textFiles(projectId: string) {
  * The paper as one document: main file with \input/\include expanded in
  * place, each part marked with the file it came from.
  */
-export async function flattenPaper(projectId: string): Promise<{ text: string; files: string[] }> {
-  const { mainFile } = await getProject(projectId);
+export async function flattenPaper(projectId: string, doc?: string): Promise<{ text: string; files: string[] }> {
+  const mainFile = doc || (await getProject(projectId)).mainFile;
+  const mainDir = path.posix.dirname(mainFile);
   const seen = new Set<string>();
   const files: string[] = [];
 
@@ -41,7 +42,7 @@ export async function flattenPaper(projectId: string): Promise<{ text: string; f
       let target = m[1].trim();
       if (!target.endsWith(".tex")) target += ".tex";
       // LaTeX resolves relative to the main file's directory; also try the including file's.
-      const candidates = [path.posix.normalize(target), path.posix.normalize(path.posix.join(dir, target))];
+      const candidates = [...new Set([path.posix.normalize(path.posix.join(mainDir, target)), path.posix.normalize(target), path.posix.normalize(path.posix.join(dir, target))])];
       let inner = "";
       for (const cand of candidates) {
         if (cand.startsWith("..")) continue;

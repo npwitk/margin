@@ -6,10 +6,11 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
   acceptSuggestion, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf,
-  type CompileResult, type ThreadKind, type ThreadStatus,
+  type CompileResult, type Engine, type ThreadKind, type ThreadStatus,
 } from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
 import { compileProject, compileWorker } from "./compile.ts";
+import { createDocument, listDocuments, pdfPathOf, renameDocuments, resolveDocument, updateDocument } from "./documents.ts";
 import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
 import { checkpoint, history, withGitLock } from "./git.ts";
 import { importArxiv, importGit, importZip } from "./importers.ts";
@@ -33,10 +34,6 @@ async function currentText(id: string, rel: string) {
   return live === null ? readText(id, rel) : { content: live, etag: etagOf(live) };
 }
 
-/** Build output sits next to the main file (LaTeX runs in its folder). */
-function pdfFile(id: string, mainFile: string) {
-  return path.join(workDir(id), path.dirname(mainFile), "_out", `${path.basename(mainFile, ".tex")}.pdf`);
-}
 
 export const tokenRoutes = new Hono<AppEnv>()
   .get("/", async (c) => c.json(await listTokens(c.get("session").name)))
@@ -163,6 +160,7 @@ export const projectRoutes = new Hono<AppEnv>()
     resolvePath(id, to);
     await releasePath(id, from);
     await moveEntry(id, from, to);
+    await renameDocuments(id, (p) => (p === from ? to : p.startsWith(`${from}/`) ? `${to}${p.slice(from.length)}` : p));
     emit(id, "filesVersion", Date.now());
     return c.json({ ok: true });
   })
@@ -172,6 +170,7 @@ export const projectRoutes = new Hono<AppEnv>()
     resolvePath(id, rel);
     await releasePath(id, rel);
     await deleteEntry(id, rel);
+    await renameDocuments(id, (p) => (p === rel || p.startsWith(`${rel}/`) ? null : p));
     emit(id, "filesVersion", Date.now());
     return c.json({ ok: true });
   })
@@ -198,26 +197,45 @@ export const projectRoutes = new Hono<AppEnv>()
   })
 
   // ── Compile & preview ────────────────────────────────────────────────────
-  .post("/:id/compile", limit("compile", 30, 60), async (c) => c.json(await compileProject(c.req.param("id"), c.get("session").name)))
+  .post("/:id/compile", limit("compile", 30, 60), async (c) => {
+    const { doc } = await c.req.json<{ doc?: string }>().catch(() => ({ doc: undefined }));
+    return c.json(await compileProject(c.req.param("id"), c.get("session").name, doc));
+  })
+
+  // ── Documents: every .tex with a \documentclass ─────────────────────────
+  .get("/:id/documents", async (c) => c.json(await listDocuments(c.req.param("id"))))
+  .post("/:id/documents", limit("create", 30, 3600), async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ title?: string; template?: string; path?: string; engine?: Engine }>();
+    const created = await createDocument(id, body);
+    emit(id, "filesVersion", Date.now());
+    return c.json({ path: created, documents: await listDocuments(id) }, 201);
+  })
+  .patch("/:id/documents", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ path: string; engine?: Engine; title?: string; makeDefault?: boolean }>();
+    const project = await updateDocument(id, body.path, body);
+    return c.json({ project, documents: await listDocuments(id) });
+  })
 
   .get("/:id/output.pdf", async (c) => {
     const id = c.req.param("id");
-    const project = await getProject(id);
-    const data = await readFile(pdfFile(id, project.mainFile)).catch(() => null);
+    const { path: doc } = await resolveDocument(id, c.req.query("doc"));
+    const data = await readFile(pdfPathOf(id, doc)).catch(() => null);
     if (!data) throw new HttpError(404, "No PDF yet — compile first");
     return new Response(data, { headers: { "content-type": "application/pdf", "cache-control": "no-store" } });
   })
 
   .get("/:id/synctex/forward", async (c) => {
     const id = c.req.param("id");
-    const { mainFile } = await getProject(id);
+    const { path: mainFile } = await resolveDocument(id, c.req.query("doc"));
     const q = new URLSearchParams({ projectId: id, mainFile, file: c.req.query("file") ?? "", line: c.req.query("line") ?? "1" });
     return c.json(await compileWorker(`/synctex/forward?${q}`));
   })
 
   .get("/:id/synctex/inverse", async (c) => {
     const id = c.req.param("id");
-    const { mainFile } = await getProject(id);
+    const { path: mainFile } = await resolveDocument(id, c.req.query("doc"));
     const { page = "1", x = "0", y = "0" } = c.req.query();
     const q = new URLSearchParams({ projectId: id, mainFile, page, x, y });
     return c.json(await compileWorker(`/synctex/inverse?${q}`));

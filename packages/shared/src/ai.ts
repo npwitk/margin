@@ -137,6 +137,8 @@ export interface PaperReview {
   id: string;
   skill: string;
   goal: string;
+  /** The document reviewed (a project can hold several). */
+  doc?: string;
   by: string;
   at: string;
   result: ReviewResult;

@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Chat, ChatEntry, ChatEvent, ChatPart, ChatSummary, ChatToolStep, Session } from "@margin/shared";
 import { setAgentActivity } from "../collab.ts";
 import { DATA_DIR } from "../config.ts";
+import { listDocuments } from "../documents.ts";
 import { getProject, listFiles, projectDir } from "../storage.ts";
 import { FALLBACK, MODEL, clientFor, describeApiError } from "./client.ts";
 import { runTool, toolDefinitions, type ToolOutcome } from "./tools.ts";
@@ -25,6 +26,7 @@ How you change the paper:
 - You cannot edit files directly. Use propose_edit to suggest a concrete change (it appears inline for the authors to accept), or add_comment for questions and concerns. Keep each suggestion to one focused change - a sentence, a paragraph, an equation - so it's easy to review.
 - Read a file before suggesting edits to it, and copy \`find\` text exactly from what read_file returned (without the line-number prefix). Files change under you; if a quote no longer matches, read again.
 - After LaTeX edits that could break the build, or when asked to fix errors, use compile to check.
+- A project can hold several LaTeX documents (the paper, slides, a cover letter, a rebuttal…): any .tex file with a \\documentclass. The person tells you which one they're viewing. Use list_documents to see them, compile with a document to build one, and create_document to start a new one. A new document can reuse the project's .bib, macros and figures, but only from its own folder or below (LaTeX can't read ../ paths here), so put it next to the main document unless asked otherwise. Read the paper first when the new document is about it (a rebuttal, slides, a cover letter), and reuse its \\cite keys.
 - Never invent references. Cite only works already in the project's .bib files or ones you verified with web_search; when adding one, propose a complete BibTeX entry for the .bib file.
 
 How you respond:
@@ -83,16 +85,18 @@ export function stopChat(chatId: string) {
 
 /** Project facts for the first turn; later turns rely on the conversation. */
 async function projectContext(projectId: string) {
-  const [project, files] = await Promise.all([getProject(projectId), listFiles(projectId)]);
-  const list = files.filter((f) => f.type === "file").map((f) => `${f.path}${f.path === project.mainFile ? "  [main]" : ""}`).join("\n");
-  return `<project>\nTitle: ${project.name}\nMain file: ${project.mainFile}\nEngine: ${project.engine}${project.goal ? `\nPublishing goal: ${project.goal}` : ""}\nFiles:\n${list}\n</project>`;
+  const [project, files, docs] = await Promise.all([getProject(projectId), listFiles(projectId), listDocuments(projectId)]);
+  const roots = new Set(docs.map((d) => d.path));
+  const list = files.filter((f) => f.type === "file").map((f) => `${f.path}${f.path === project.mainFile ? "  [default document]" : roots.has(f.path) ? "  [document]" : ""}`).join("\n");
+  const documents = docs.map((d) => `- ${d.path}: "${d.title}" (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}`).join("\n");
+  return `<project>\nTitle: ${project.name}\nDefault document: ${project.mainFile}${project.goal ? `\nPublishing goal: ${project.goal}` : ""}\nDocuments:\n${documents}\nFiles:\n${list}\n</project>`;
 }
 
 /**
  * Run one user turn: stream the model's reply to `send`, execute its tool
  * calls, and loop until it's done. Persists history as it goes.
  */
-export async function runTurn(projectId: string, chatId: string, session: Session, text: string, send: (e: ChatEvent) => void) {
+export async function runTurn(projectId: string, chatId: string, session: Session, text: string, doc: string | undefined, send: (e: ChatEvent) => void) {
   if (running.has(chatId)) throw new Error("Claude is already working in this chat");
   const abort = new AbortController();
   running.set(chatId, abort);
@@ -113,7 +117,7 @@ export async function runTurn(projectId: string, chatId: string, session: Sessio
     const first = chat.messages.length === 0;
     const userContent: Anthropic.Beta.BetaContentBlockParam[] = [];
     if (first) userContent.push({ type: "text", text: await projectContext(projectId) });
-    userContent.push({ type: "text", text: `${session.name} writes:\n${text}` });
+    userContent.push({ type: "text", text: `${doc ? `(${session.name} is viewing the document ${doc}.)\n` : ""}${session.name} writes:\n${text}` });
     chat.messages.push({ role: "user", content: userContent });
     chat.entries.push({ role: "user", by: session.name, text, at: new Date().toISOString() }, entry);
     if (first && chat.title === "New chat") chat.title = text.replace(/\s+/g, " ").slice(0, 60);

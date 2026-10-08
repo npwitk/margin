@@ -84,7 +84,7 @@ export const aiProjectRoutes = new Hono<AppEnv>()
 
   // Send a message; the reply streams back as server-sent events.
   .post("/:id/ai/chats/:chat/messages", limit("chat", 120, 3600), async (c) => {
-    const { text } = await c.req.json<{ text?: string }>();
+    const { text, doc } = await c.req.json<{ text?: string; doc?: string }>();
     if (!text?.trim()) throw new HttpError(400, "Message is empty");
     const id = c.req.param("id"), chatId = c.req.param("chat"), session = c.get("session");
     await getChat(id, chatId).catch(() => { throw new HttpError(404, "Chat not found"); });
@@ -93,7 +93,7 @@ export const aiProjectRoutes = new Hono<AppEnv>()
       sse.onAbort(() => { open = false; });
       const queue: Promise<unknown>[] = [];
       try {
-        await runTurn(id, chatId, session, text.trim().slice(0, 20_000), (e) => {
+        await runTurn(id, chatId, session, text.trim().slice(0, 20_000), doc, (e) => {
           if (open) queue.push(sse.writeSSE({ data: JSON.stringify(e) }).catch(() => {}));
         });
       } catch (err) {
@@ -118,9 +118,9 @@ export const aiProjectRoutes = new Hono<AppEnv>()
     return c.json(r);
   })
   .post("/:id/ai/reviews", limit("review", 20, 3600), async (c) => {
-    const { skill, goal, runner } = await c.req.json<{ skill?: string; goal?: string; runner?: { deviceId: string; agentId: string } }>();
+    const { skill, goal, runner, doc } = await c.req.json<{ skill?: string; goal?: string; runner?: { deviceId: string; agentId: string }; doc?: string }>();
     try {
-      return c.json(await startReview(c.req.param("id"), c.get("session"), skill ?? "general", goal, runner), 202);
+      return c.json(await startReview(c.req.param("id"), c.get("session"), skill ?? "general", goal, runner, doc), 202);
     } catch (err) {
       throw wrap(err);
     }

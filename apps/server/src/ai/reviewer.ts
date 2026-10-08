@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { PaperReview, ReviewResult, ReviewSkill, Session } from "@margin/shared";
 import { DATA_DIR, SKILLS_DIR } from "../config.ts";
 import { getProject, projectDir } from "../storage.ts";
+import { resolveDocument } from "../documents.ts";
 import { FALLBACK, MODEL, clientFor, describeApiError } from "./client.ts";
 import { flattenPaper, locateQuote, textFiles, textOf } from "./paper.ts";
 import { agentPanelPrompt, consolidate, parseAgentPanel, parsePanel, runPanel } from "./panel.ts";
@@ -105,19 +106,20 @@ export async function getReview(projectId: string, id: string): Promise<StoredRe
 export interface Runner { deviceId: string; agentId: string }
 
 /** Start a review in the background; poll getReview for the result. */
-export async function startReview(projectId: string, session: Session, skillId: string, goalOverride?: string, runner?: Runner): Promise<StoredReview> {
+export async function startReview(projectId: string, session: Session, skillId: string, goalOverride?: string, runner?: Runner, docPath?: string): Promise<StoredReview> {
   const skill = (await listSkills()).find((s) => s.id === skillId);
   if (!skill) throw new Error("Unknown review skill");
-  const project = await getProject(projectId);
+  const doc = (await resolveDocument(projectId, docPath)).path;
+  const project = { ...(await getProject(projectId)), mainFile: doc };
   const goal = goalOverride?.trim() || project.goal || "Not specified - assess general readiness for peer review.";
   if (runner) return startAgentReview(projectId, session, skill, project, goal, runner);
   const client = await clientFor(session); // fail fast without a key
-  const review: StoredReview = { id: crypto.randomUUID(), skill: skill.id, goal, by: session.name, at: new Date().toISOString(), status: "running" };
+  const review: StoredReview = { id: crypto.randomUUID(), skill: skill.id, goal, doc, by: session.name, at: new Date().toISOString(), status: "running" };
   await saveReview(projectId, review);
 
   void (async () => {
     try {
-      const paper = await flattenPaper(projectId);
+      const paper = await flattenPaper(projectId, doc);
       const bibs = (await textFiles(projectId)).filter((f) => f.path.endsWith(".bib"));
       const bibText = (await Promise.all(bibs.map(async (b) => `%%%%% file ${b.path}\n${await textOf(projectId, b.path)}`))).join("\n\n");
 
@@ -200,7 +202,7 @@ ${JSON.stringify(z.toJSONSchema(Review))}`;
 }
 
 async function startAgentReview(projectId: string, session: Session, skill: Skill, project: { name: string; mainFile: string }, goal: string, runner: Runner): Promise<StoredReview> {
-  const review: StoredReview = { id: crypto.randomUUID(), skill: skill.id, goal, by: session.name, at: new Date().toISOString(), status: "running" };
+  const review: StoredReview = { id: crypto.randomUUID(), skill: skill.id, goal, doc: project.mainFile, by: session.name, at: new Date().toISOString(), status: "running" };
   const prompt = skill.kind === "panel"
     ? agentPanelPrompt(parsePanel(skill.body, skill.meta), skill.name, goal, project.mainFile)
     : agentRubricPrompt(skill, goal, project.mainFile);
@@ -243,8 +245,8 @@ setReviewHook({
       if (!r) return;
       try {
         const skill = (await listSkills()).find((x) => x.id === r.skill)!;
-        const project = await getProject(t.projectId);
-        const paper = await flattenPaper(t.projectId);
+        const project = { ...(await getProject(t.projectId)), ...(r.doc ? { mainFile: r.doc } : {}) };
+        const paper = await flattenPaper(t.projectId, project.mainFile);
         const locate = (quote: string) => locateQuote(t.projectId, quote, paper.files);
         let result: ReviewResult;
         if (skill.kind === "panel") {

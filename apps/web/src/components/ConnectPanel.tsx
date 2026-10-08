@@ -16,10 +16,12 @@ interface Props {
   onPickAgent(deviceId: string, agentId: string, threadId?: string): void;
   /** Open this thread when the panel shows (e.g. right after a handoff). */
   initialThreadId?: string;
+  /** The document the person is viewing; the agent is told with each message. */
+  doc?: string;
 }
 
 /** Chat with a local agent (Claude Code, Codex…) running through margin-connect. */
-export function ConnectPanel({ connect, device, agentId, onOpenFile, onPickAgent, initialThreadId }: Props) {
+export function ConnectPanel({ connect, device, agentId, onOpenFile, onPickAgent, initialThreadId, doc }: Props) {
   const agent = device.agents.find((a) => a.id === agentId);
   const mine = connect.threads.filter((t) => t.deviceId === device.id && t.agentId === agentId && t.purpose !== "review");
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -55,7 +57,7 @@ export function ConnectPanel({ connect, device, agentId, onOpenFile, onPickAgent
         setThreadId(id);
       }
       setInput("");
-      await run(() => connect.command(device.id, { kind: "prompt", threadId: id!, text, by: "" }));
+      await run(() => connect.command(device.id, { kind: "prompt", threadId: id!, text, by: "", doc }));
     } finally {
       setBusy(false);
     }

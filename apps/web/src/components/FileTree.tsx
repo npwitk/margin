@@ -5,7 +5,7 @@ import { load, save } from "../lib/storage.ts";
 import type { Peer } from "../lib/collab.ts";
 import { Avatar } from "./Presence.tsx";
 
-export type TreeAction = "newFile" | "newFolder" | "upload" | "rename" | "delete" | "setMain";
+export type TreeAction = "newFile" | "newFolder" | "upload" | "rename" | "delete" | "setMain" | "compileDoc";
 
 interface Node { name: string; path: string; type: "file" | "dir"; children: Node[] }
 
@@ -14,6 +14,9 @@ interface Props {
   files: FileEntry[];
   openPath: string | null;
   mainFile: string;
+  /** Every document root (.tex with \documentclass), and the one being compiled. */
+  documents?: string[];
+  activeDoc?: string;
   dirty: Set<string>;
   peersByFile: Map<string, Peer[]>;
   onOpen(path: string): void;
@@ -45,7 +48,7 @@ function fileIcon(path: string) {
   return "file";
 }
 
-export function FileTree({ projectId, files, openPath, mainFile, dirty, peersByFile, onOpen, onAction, onDropFiles }: Props) {
+export function FileTree({ projectId, files, openPath, mainFile, documents = [], activeDoc, dirty, peersByFile, onOpen, onAction, onDropFiles }: Props) {
   const tree = useMemo(() => buildTree(files), [files]);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(load<string[]>(`collapsed:${projectId}`, [])));
   const [menu, setMenu] = useState<{ x: number; y: number; node: Node | null } | null>(null);
@@ -106,7 +109,8 @@ export function FileTree({ projectId, files, openPath, mainFile, dirty, peersByF
           <span className="chev-space" />
           <Icon name={fileIcon(n.path)} size={14} className="tree-icon" />
           <span className={`tree-name ${isTextPath(n.path) ? "" : "muted"}`}>{n.name}</span>
-          {n.path === mainFile && <span className="badge">main</span>}
+          {n.path === mainFile ? <span className={`badge ${activeDoc === n.path ? "" : "dim"}`} title="Default document">main</span>
+            : documents.includes(n.path) && <span className={`badge ${activeDoc === n.path ? "" : "dim"}`} title={activeDoc === n.path ? "The document you're compiling" : "A document: right-click to compile it"}>doc</span>}
           {peersByFile.get(n.path)?.slice(0, 3).map((p) => <Avatar key={p.clientId} name={p.user.name} agent={p.user.agent} size="xs" title={p.user.agent ? p.user.name : `${p.user.name} is editing`} />)}
           {dirty.has(n.path) && <span className="dot" title="Sending edits…" />}
         </button>
@@ -135,8 +139,11 @@ export function FileTree({ projectId, files, openPath, mainFile, dirty, peersByF
                 <button onClick={() => act("upload", menuDir)}><Icon name="upload" size={14} />Upload…</button>
               </>
             )}
+            {menu.node?.type === "file" && documents.includes(menu.node.path) && menu.node.path !== activeDoc && (
+              <button onClick={() => act("compileDoc", menu.node!.path)}><Icon name="play" size={14} />Compile this document</button>
+            )}
             {menu.node?.type === "file" && menu.node.path.endsWith(".tex") && menu.node.path !== mainFile && (
-              <button onClick={() => act("setMain", menu.node!.path)}><Icon name="star" size={14} />Set as main file</button>
+              <button onClick={() => act("setMain", menu.node!.path)}><Icon name="star" size={14} />Make default document</button>
             )}
             {menu.node && (
               <>

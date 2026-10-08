@@ -3,14 +3,55 @@ export type Engine = "pdflatex" | "xelatex" | "lualatex";
 export interface Project {
   id: string;
   name: string;
+  /** The default document (opened and compiled first). */
   mainFile: string;
   engine: Engine;
+  /** Extra settings per document (engine, title). Documents themselves are found by scanning for \documentclass. */
+  documents?: DocumentSettings[];
   /** What the paper is aiming for, e.g. "NeurIPS 2027 main track". Used by the AI reviewer. */
   goal?: string;
   /** Set while Claude is turning an idea into a first draft. */
   setup?: { status: "planning" | "done" | "error"; error?: string };
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DocumentSettings { path: string; engine?: Engine; title?: string }
+
+/** A compilable root .tex file in a project: the paper, slides, a cover letter… */
+export interface DocumentInfo {
+  path: string;
+  title: string;
+  engine: Engine;
+  /** The project's default document (Project.mainFile). */
+  isDefault: boolean;
+  hasPdf: boolean;
+  /** e.g. "beamer", "article". */
+  docClass?: string;
+}
+
+export const DOCUMENT_TEMPLATES = [
+  { id: "article", label: "Article", hint: "A paper or report" },
+  { id: "beamer", label: "Slides", hint: "Beamer presentation" },
+  { id: "letter", label: "Letter", hint: "Cover letter or rebuttal" },
+  { id: "poster", label: "Poster", hint: "A0 conference poster" },
+  { id: "ieee", label: "IEEE conference", hint: "IEEEtran two-column" },
+  { id: "blank", label: "Blank", hint: "Just \\documentclass" },
+] as const;
+export type DocumentTemplate = (typeof DOCUMENT_TEMPLATES)[number]["id"];
+
+/** \documentclass that isn't commented out → this .tex is a document root. Returns the class name. */
+export function documentClassOf(tex: string): string | null {
+  const m = /^[^%\n]*?\\documentclass\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/m.exec(tex);
+  return m ? m[1].trim() : null;
+}
+
+/** The \title{…} of a document, as plain text, if it has one. */
+export function documentTitleOf(tex: string): string | null {
+  const m = /^[^%\n]*?\\title\s*(?:\[[^\]]*\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}/m.exec(tex);
+  if (!m) return null;
+  const t = m[1].replace(/\\\\/g, " ").replace(/\\[a-zA-Z]+\*?/g, "").replace(/[{}~]/g, " ").replace(/\s+/g, " ").trim();
+  return t || null;
 }
 
 export interface FileEntry {
@@ -204,7 +245,7 @@ export interface PresenceState {
 /** Live events the server pushes through the project room. */
 export interface RoomEvents {
   filesVersion?: number;
-  lastCompile?: { by: string; at: number; ok: boolean };
+  lastCompile?: { by: string; at: number; ok: boolean; doc?: string };
 }
 
 /** Collaboration document names: one per text file, plus one room per project. */

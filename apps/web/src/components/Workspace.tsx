@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isTextPath, type AiSettings, type CompileResult, type Diagnostic, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions } from "@margin/shared";
+import { isTextPath, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions } from "@margin/shared";
+import { DocumentSwitcher, NewDocumentDialog } from "./DocumentSwitcher.tsx";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
 import { useThreads } from "../lib/review.ts";
@@ -43,8 +44,21 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [revealAt, setRevealAt] = useState<{ line: number; key: number }>();
   const [dirty, setDirty] = useState<Set<string>>(new Set());
   const [compiling, setCompiling] = useState(false);
-  const [result, setResult] = useState<CompileResult | null>(null);
-  const [pdfVersion, setPdfVersion] = useState(0);
+  // Several documents per project: each has its own last compile and PDF.
+  const [docs, setDocs] = useState<DocumentInfo[]>([]);
+  const [activeDoc, setActiveDocState] = useState<string | null>(() => load<string | null>(`doc:${projectId}`, null));
+  const [results, setResults] = useState<Record<string, CompileResult>>({});
+  const [pdfVersions, setPdfVersions] = useState<Record<string, number>>({});
+  const [newDocOpen, setNewDocOpen] = useState(false);
+  const [docMenuSignal, setDocMenuSignal] = useState(0);
+  // Current values for async callbacks (compile queue, live events).
+  const activeRef = useRef<string | null>(activeDoc);
+  const projectRef = useRef<Project | null>(null);
+  const docsRef = useRef<DocumentInfo[]>([]);
+  const resultsRef = useRef<Record<string, CompileResult>>({});
+  projectRef.current = project;
+  docsRef.current = docs;
+  resultsRef.current = results;
   const [showProblems, setShowProblems] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -95,6 +109,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const center = useRef<HTMLDivElement>(null);
 
   const notify = useCallback((msg: string) => setToast(msg), []);
+  const bumpPdf = useCallback((doc: string) => setPdfVersions((m) => ({ ...m, [doc]: (m[doc] ?? 0) + 1 })), []);
+  const refreshDocs = useCallback(() => api.documents(projectId).then((d) => { setDocs(d); return d; }).catch(() => [] as DocumentInfo[]), [projectId]);
   useEffect(() => {
     if (!toast) return;
     const t = window.setTimeout(() => setToast(null), 3500);
@@ -144,16 +160,18 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     const events = collab.events;
     const onEvent = (e: { keysChanged: Set<string>; transaction: { local: boolean } }) => {
       if (e.transaction.local) return;
-      if (e.keysChanged.has("filesVersion")) void refreshFiles();
-      const last = events.get("lastCompile") as { by: string; ok: boolean } | undefined;
+      if (e.keysChanged.has("filesVersion")) { void refreshFiles(); void refreshDocs(); }
+      const last = events.get("lastCompile") as { by: string; ok: boolean; doc?: string } | undefined;
       if (e.keysChanged.has("lastCompile") && last && last.by !== session.name) {
-        setPdfVersion((v) => v + 1);
-        notify(`${last.by} compiled${last.ok ? "" : " (with errors)"} — preview updated`);
+        const doc = last.doc ?? projectRef.current?.mainFile;
+        if (!doc) return;
+        bumpPdf(doc);
+        if (doc === activeRef.current) notify(`${last.by} compiled${last.ok ? "" : " (with errors)"} — preview updated`);
       }
     };
     events.observe(onEvent);
     return () => events.unobserve(onEvent);
-  }, [collab, refreshFiles, session.name, notify]);
+  }, [collab, refreshFiles, refreshDocs, session.name, notify, bumpPdf]);
 
   // ── Compile ──────────────────────────────────────────────────────────────
   const compileImpl = useRef<() => Promise<void>>(async () => {});
@@ -163,10 +181,11 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     setCompiling(true);
     try {
       await collab?.flush();
-      const r = await api.compile(projectId);
-      setResult(r);
-      if (r.hasPdf) setPdfVersion((v) => v + 1);
-      if (r.diagnostics.some((d) => d.severity === "error")) setShowProblems(true);
+      const r = await api.compile(projectId, activeRef.current ?? undefined);
+      setResults((m) => ({ ...m, [r.doc]: r }));
+      if (r.hasPdf) bumpPdf(r.doc);
+      if (r.doc === activeRef.current && r.diagnostics.some((d) => d.severity === "error")) setShowProblems(true);
+      if (r.hasPdf) setDocs((d) => d.map((x) => (x.path === r.doc ? { ...x, hasPdf: true } : x)));
     } catch (err) {
       notify((err as Error).message);
     } finally {
@@ -179,10 +198,14 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   // ── Initial load ─────────────────────────────────────────────────────────
   useEffect(() => {
-    Promise.all([api.project(projectId), api.files(projectId)])
-      .then(([p, f]) => {
+    Promise.all([api.project(projectId), api.files(projectId), refreshDocs()])
+      .then(([p, f, d]) => {
         setProject(p);
         setFiles(f);
+        const saved = load<string | null>(`doc:${projectId}`, null);
+        const start = saved && d.some((x) => x.path === saved) ? saved : p.mainFile;
+        activeRef.current = start;
+        setActiveDocState(start);
         const last = load<string | null>(`open:${projectId}`, null);
         const startView = load<"write" | "board" | "review">(`view:${projectId}`, "write");
         openFile(last && f.some((x) => x.path === last) ? last : p.mainFile);
@@ -190,7 +213,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         compile();
       })
       .catch((err) => setLoadError(err.message));
-  }, [projectId, openFile, compile]);
+  }, [projectId, openFile, compile, refreshDocs]);
 
   // While Claude plans a paper from an idea, poll until it's ready.
   const planning = project?.setup?.status === "planning";
@@ -237,6 +260,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       if (!mod) return;
       const k = e.key.toLowerCase();
       if (k === "k") { e.preventDefault(); setPaletteOpen((o) => !o); }
+      else if (k === "d" && e.shiftKey) { e.preventDefault(); setDocMenuSignal((n) => n + 1); }
       else if (k === "s" || k === "enter") { e.preventDefault(); compile(); }
       else if (k === "b" && e.shiftKey) { e.preventDefault(); setView((v) => (v === "board" ? "write" : "board")); }
       else if (k === "b") { e.preventDefault(); setSidebar((s: boolean) => { save("sidebar", !s); return !s; }); }
@@ -305,9 +329,15 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           await refreshFiles();
           break;
         }
-        case "setMain":
-          setProject(await api.updateProject(projectId, { mainFile: path }));
-          compile();
+        case "setMain": {
+          const r = await api.updateDocument(projectId, { path, makeDefault: true });
+          setProject(r.project);
+          setDocs(r.documents);
+          selectDoc(path);
+          break;
+        }
+        case "compileDoc":
+          selectDoc(path);
           break;
       }
     } catch (err) {
@@ -318,7 +348,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   // ── SyncTeX ──────────────────────────────────────────────────────────────
   const forwardSync = async (path: string, line: number) => {
     try {
-      const res = await api.forward(projectId, path, line);
+      const res = await api.forward(projectId, path, line, activeRef.current ?? undefined);
       if (res) setHighlight({ ...res, key: Date.now() });
       else notify("That line isn't in the PDF yet — compile first");
     } catch (err) {
@@ -328,7 +358,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   const inverseSync = async (page: number, x: number, y: number) => {
     try {
-      const res = await api.inverse(projectId, page, x, y);
+      const res = await api.inverse(projectId, page, x, y, activeRef.current ?? undefined);
       if (res) openFile(res.file, res.line);
       else notify("No source location there");
     } catch (err) {
@@ -371,9 +401,32 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   const openDiagnostic = (d: Diagnostic) => d.file && openFile(d.file, d.line);
 
-  const setEngine = async (engine: Engine) => {
-    setProject(await api.updateProject(projectId, { engine }));
+  const setEngine = async (engine: Engine, doc = activeRef.current ?? project?.mainFile) => {
+    if (!doc) return;
+    const r = await api.updateDocument(projectId, { path: doc, engine });
+    setProject(r.project);
+    setDocs(r.documents);
     compile();
+  };
+
+  /** Switch the document you compile and preview. Shows its last PDF right away; compiles it if it has none. */
+  function selectDoc(doc: string) {
+    activeRef.current = doc;
+    setActiveDocState(doc);
+    save(`doc:${projectId}`, doc);
+    const info = docsRef.current.find((d) => d.path === doc);
+    if (info?.hasPdf) setPdfVersions((m) => (m[doc] ? m : { ...m, [doc]: 1 }));
+    if (!resultsRef.current[doc]) compile();
+  }
+
+  const createDoc = async (input: { title: string; template: string; path?: string }) => {
+    const r = await api.createDocument(projectId, input);
+    setDocs(r.documents);
+    await refreshFiles();
+    setNewDocOpen(false);
+    openFile(r.path);
+    selectDoc(r.path);
+    notify(`Created ${r.path}`);
   };
 
   const renameProject = async () => {
@@ -426,18 +479,23 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       { id: "rename-project", label: "Rename project…", section: "Project", icon: "file", run: () => void renameProject() },
       { id: "projects", label: "Back to all projects", section: "Navigate", icon: "back", run: () => navigate({ name: "projects" }) },
     ];
-    if (textPath?.endsWith(".tex") && textPath !== project?.mainFile) {
-      cmds.push({ id: "main", label: `Set ${textPath} as main file`, section: "Project", icon: "star", run: () => void onTreeAction("setMain", textPath) });
+    cmds.push({ id: "newdoc", label: "New document (slides, letter, poster…)…", section: "Action", icon: "plus", run: () => setNewDocOpen(true) });
+    for (const d of docs) {
+      if (d.path !== activeDoc) cmds.push({ id: `doc:${d.path}`, label: `Switch to ${d.title} (${d.path})`, section: "Document", icon: "file", hint: d.isDefault ? "default" : undefined, run: () => selectDoc(d.path) });
     }
+    if (textPath?.endsWith(".tex") && textPath !== project?.mainFile && docs.some((d) => d.path === textPath)) {
+      cmds.push({ id: "main", label: `Make ${textPath} the default document`, section: "Document", icon: "star", run: () => void onTreeAction("setMain", textPath) });
+    }
+    const activeEngine = docs.find((d) => d.path === activeDoc)?.engine ?? project?.engine;
     for (const e of ENGINES) {
-      if (e.id !== project?.engine) cmds.push({ id: `engine-${e.id}`, label: `Compile with ${e.label}`, section: "Project", icon: "terminal", run: () => void setEngine(e.id) });
+      if (e.id !== activeEngine) cmds.push({ id: `engine-${e.id}`, label: `Compile ${activeDoc ?? "this document"} with ${e.label}`, section: "Document", icon: "terminal", run: () => void setEngine(e.id) });
     }
     for (const f of files) {
       if (f.type === "file") cmds.push({ id: `file:${f.path}`, label: f.path, section: "File", icon: "file", run: () => openFile(f.path) });
     }
     return cmds;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, textPath, project, showProblems, view, reviewOpen]);
+  }, [files, textPath, project, showProblems, view, reviewOpen, docs, activeDoc]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   if (loadError) {
@@ -450,6 +508,9 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   }
   if (!project || !collab) return <div className="center-screen"><Spinner size={20} /></div>;
 
+  const currentDoc = activeDoc && (docs.length === 0 || docs.some((d) => d.path === activeDoc)) ? activeDoc : project.mainFile;
+  const result = results[currentDoc] ?? null;
+  const pdfVersion = pdfVersions[currentDoc] ?? 0;
   const errors = result?.diagnostics.filter((d) => d.severity === "error").length ?? 0;
   const warnings = result?.diagnostics.filter((d) => d.severity === "warning").length ?? 0;
   const binaryOpen = openPath && !isTextPath(openPath) ? openPath : null;
@@ -461,7 +522,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       <header className="topbar">
         <button className="icon-btn" onClick={() => navigate({ name: "projects" })} title="All projects"><Icon name="back" /></button>
         <button className="project-name" onClick={renameProject} title="Rename project">{project.name}</button>
-        <span className="chip subtle" title="Main file · engine">{project.mainFile} · {ENGINES.find((e) => e.id === project.engine)?.label}</span>
+        <DocumentSwitcher docs={docs.length ? docs : [{ path: project.mainFile, title: project.name, engine: project.engine, isDefault: true, hasPdf: false }]}
+          active={currentDoc} onSelect={selectDoc} onCreate={() => setNewDocOpen(true)} openSignal={docMenuSignal}
+          onSetEngine={(path, engine) => void setEngine(engine, path).catch((e) => notify(e.message))}
+          onMakeDefault={(path) => void onTreeAction("setMain", path)} />
         <div className="segmented">
           <button className={view === "write" ? "active" : ""} onClick={() => setView("write")}>Write</button>
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")} title={`Board (${MOD}⇧B)`}>Board</button>
@@ -491,7 +555,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         <Board collab={collab} session={session} files={files} peers={peers} projectName={project.name} onOpenFile={(p) => openFile(p)} />
       )}
       {view === "review" && (
-        <ReviewView project={project} settings={aiSettings} onProjectChange={setProject} onOpenSettings={() => setAiSettingsOpen(true)}
+        <ReviewView project={project} settings={aiSettings} onProjectChange={setProject} onOpenSettings={() => setAiSettingsOpen(true)} docs={docs} activeDoc={currentDoc}
           onOpen={(p, line) => openFile(p, line)} notify={notify} />
       )}
       {planning && (
@@ -515,6 +579,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               files={files}
               openPath={openPath}
               mainFile={project.mainFile}
+              documents={docs.map((d) => d.path)}
+              activeDoc={currentDoc}
               dirty={dirty}
               peersByFile={peersByFile}
               onOpen={(p) => openFile(p)}
@@ -538,7 +604,9 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                   <button className={!mdPreview ? "active" : ""} onClick={() => mdPreview && toggleMd()}>Edit</button>
                 </div>
               )}
-              {!binaryOpen && !mdPreview && /\.tex$/i.test(textPath ?? "") && <span className="muted small hint">{MOD}J jump to PDF · {MOD}-click PDF to jump back</span>}
+              {!binaryOpen && !mdPreview && textPath && textPath !== currentDoc && docs.some((d) => d.path === textPath)
+                ? <button className="chip doc-hint" onClick={() => selectDoc(textPath)} title="This file is its own document"><Icon name="play" size={11} />Compile & preview this document</button>
+                : !binaryOpen && !mdPreview && /\.tex$/i.test(textPath ?? "") && <span className="muted small hint">{MOD}J jump to PDF · {MOD}-click PDF to jump back</span>}
               {!binaryOpen && (
                 <>
                   <button className="btn ghost tight" onClick={() => startComment()} title={`Comment on selection (${MOD}⌥M)`}><Icon name="comment" size={13} />Comment</button>
@@ -606,14 +674,14 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
             </div>
             <div className="preview-body" hidden={previewTab !== "pdf"}>
               <PdfViewer
-                url={pdfVersion ? api.pdfUrl(projectId, pdfVersion) : null}
+                url={pdfVersion ? api.pdfUrl(projectId, pdfVersion, currentDoc) : null}
                 highlight={highlight}
                 onInverse={(pg, x, y) => void inverseSync(pg, x, y)}
                 emptyMessage={compiling ? "Compiling…" : errors ? "Fix the errors to see a PDF" : "Compile to see your paper"}
               />
             </div>
             <div className="preview-body" hidden={previewTab !== "assistant"}>
-              <AssistantPanel projectId={projectId} session={session} settings={aiSettings} request={assistantRequest}
+              <AssistantPanel projectId={projectId} session={session} settings={aiSettings} request={assistantRequest} doc={currentDoc}
                 onOpenSettings={() => setAiSettingsOpen(true)} onOpenSuggestion={openSuggestion}
                 onOpenFile={(p, review) => { openFile(p); if (review) setReviewOpen(true); }} onCreateToken={() => setLocalOpen(true)} />
             </div>
@@ -640,6 +708,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       {historyOpen && <HistoryPanel projectId={projectId} onClose={() => setHistoryOpen(false)} beforeCheckpoint={() => collab.flush()} />}
       {aiSettingsOpen && <AiSettingsDialog settings={aiSettings} onChange={setAiSettings} onClose={() => setAiSettingsOpen(false)} />}
+      {newDocOpen && <NewDocumentDialog defaultDir={(project.mainFile.includes("/") ? project.mainFile.slice(0, project.mainFile.lastIndexOf("/")) : ".")} onCreate={createDoc} onClose={() => setNewDocOpen(false)} />}
       {shareOpen && <ShareDialog projectId={projectId} session={session} onClose={() => setShareOpen(false)} />}
       {localOpen && <LocalDialog projectId={projectId} session={session} onClose={() => setLocalOpen(false)} />}
       {prompt && <PromptDialog req={prompt} onDone={() => setPrompt(null)} />}

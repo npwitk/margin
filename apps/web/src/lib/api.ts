@@ -1,4 +1,5 @@
 import type {
+  DocumentInfo,
   CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
   AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
@@ -61,12 +62,17 @@ export const api = {
   },
   rawUrl: (id: string, path: string) => `/api${P(id)}/raw?path=${q(path)}`,
 
-  compile: (id: string) => req<CompileResult>(`${P(id)}/compile`, json("POST")),
-  pdfUrl: (id: string, version: number) => `/api${P(id)}/output.pdf?v=${version}`,
-  forward: (id: string, file: string, line: number) =>
-    req<SyncTexForward | null>(`${P(id)}/synctex/forward?file=${q(file)}&line=${line}`),
-  inverse: (id: string, page: number, x: number, y: number) =>
-    req<SyncTexInverse | null>(`${P(id)}/synctex/inverse?page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}`),
+  compile: (id: string, doc?: string) => req<CompileResult & { doc: string }>(`${P(id)}/compile`, json("POST", { doc })),
+  pdfUrl: (id: string, version: number, doc?: string) => `/api${P(id)}/output.pdf?v=${version}${doc ? `&doc=${q(doc)}` : ""}`,
+  forward: (id: string, file: string, line: number, doc?: string) =>
+    req<SyncTexForward | null>(`${P(id)}/synctex/forward?file=${q(file)}&line=${line}${doc ? `&doc=${q(doc)}` : ""}`),
+  inverse: (id: string, page: number, x: number, y: number, doc?: string) =>
+    req<SyncTexInverse | null>(`${P(id)}/synctex/inverse?page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}${doc ? `&doc=${q(doc)}` : ""}`),
+  documents: (id: string) => req<DocumentInfo[]>(`${P(id)}/documents`),
+  createDocument: (id: string, body: { title?: string; template?: string; path?: string }) =>
+    req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("POST", body)),
+  updateDocument: (id: string, body: { path: string; engine?: Engine; title?: string; makeDefault?: boolean }) =>
+    req<{ project: Project; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("PATCH", body)),
 
   tokens: () => req<AccessToken[]>("/tokens"),
   createToken: (label: string) => req<AccessToken & { token: string }>("/tokens", json("POST", { label })),
@@ -81,9 +87,9 @@ export const api = {
   deleteChat: (id: string, chatId: string) => req(`${P(id)}/ai/chats/${chatId}`, { method: "DELETE" }),
   stopChat: (id: string, chatId: string) => req(`${P(id)}/ai/chats/${chatId}/stop`, json("POST")),
   /** Send a message; calls onEvent for each streamed event until the turn is done. */
-  async sendChat(id: string, chatId: string, text: string, onEvent: (e: ChatEvent) => void) {
+  async sendChat(id: string, chatId: string, text: string, onEvent: (e: ChatEvent) => void, doc?: string) {
     const res = await fetch(`/api${P(id)}/ai/chats/${chatId}/messages`, {
-      method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+      method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, doc }),
     });
     if (!res.ok || !res.body) {
       const body = await res.json().catch(() => ({}));
@@ -108,8 +114,8 @@ export const api = {
   skills: (id: string) => req<ReviewSkill[]>(`${P(id)}/ai/skills`),
   reviews: (id: string) => req<StoredReview[]>(`${P(id)}/ai/reviews`),
   review: (id: string, reviewId: string) => req<StoredReview>(`${P(id)}/ai/reviews/${reviewId}`),
-  startReview: (id: string, skill: string, goal?: string, runner?: { deviceId: string; agentId: string }) =>
-    req<StoredReview>(`${P(id)}/ai/reviews`, json("POST", { skill, goal, runner })),
+  startReview: (id: string, skill: string, goal?: string, runner?: { deviceId: string; agentId: string }, doc?: string) =>
+    req<StoredReview>(`${P(id)}/ai/reviews`, json("POST", { skill, goal, runner, doc })),
   cancelReview: (id: string, reviewId: string) => req(`${P(id)}/ai/reviews/${reviewId}/cancel`, json("POST")),
   addThread: (id: string, body: { path: string; quote: string; kind: "comment" | "suggestion"; message?: string; replacement?: string }) =>
     req<{ id: string }>(`${P(id)}/review`, json("POST", body)),
