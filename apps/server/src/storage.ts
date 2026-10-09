@@ -200,7 +200,8 @@ export async function syncWorkDir(id: string) {
   const prune = async (rel: string) => {
     for (const e of await readdir(path.join(dest, rel), { withFileTypes: true }).catch(() => [])) {
       const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.name === "_out") continue;
+      // Build output and converted SVGs (for \includesvg) are kept between compiles.
+      if (e.name === "_out" || (e.name === "svg-inkscape" && e.isDirectory())) continue;
       const inProject = await lstat(path.join(src, r)).then((st) => (e.isDirectory() ? st.isDirectory() : st.isFile()), () => false);
       if (!inProject || NEVER_COMPILE.has(e.name)) await rm(path.join(dest, r), { recursive: true, force: true });
       else if (e.isDirectory()) await prune(r);

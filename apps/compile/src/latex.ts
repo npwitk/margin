@@ -5,6 +5,7 @@ import {
   type CompileResult, type Diagnostic, type Engine, type SyncTexForward, type SyncTexInverse,
 } from "@margin/shared";
 import { run } from "./run.ts";
+import { prepareSvgs } from "./svg.ts";
 
 export const OUT_DIR = "_out";
 const TIMEOUT_MS = Number(process.env.COMPILE_TIMEOUT_MS ?? 90_000);
@@ -54,13 +55,19 @@ export async function compile(workDir: string, mainFile: string, engine: Engine)
     ENGINE_FLAG[engine], "-norc", "-synctex=1", "-interaction=nonstopmode", "-file-line-error",
     "-no-shell-escape", `-outdir=${OUT_DIR}`, path.basename(mainFile),
   ];
+  // \includesvg without Inkscape or shell escape: pre-convert SVGs for the svg package.
+  const svgs = await prepareSvgs(cwd).catch(() => ({ converted: 0, failed: [] as string[] }));
   const res = await run("latexmk", args, { cwd, env: texEnv(), timeoutMs: TIMEOUT_MS });
 
   const logFile = path.join(cwd, OUT_DIR, `${stem(mainFile)}.log`);
   const texLog = await readFile(logFile, "utf8").catch(() => "");
   const log = texLog ? `${texLog}\n\n——— latexmk ———\n${res.output}` : res.output;
-  const diagnostics: Diagnostic[] = parseLatexLog(texLog, cwd).map((d) => ({ ...d, file: d.file ? projectPath(d.file, dir, mainFile) ?? d.file : undefined }));
+  const diagnostics: Diagnostic[] = parseLatexLog(texLog, cwd)
+    // Margin converted the SVGs already; the svg package's "no shell escape, no Inkscape" notes are noise.
+    .filter((d) => !(/^\[svg\]|shell escape/i.test(d.message) && /svg|inkscape/i.test(d.message) && d.severity !== "error"))
+    .map((d) => ({ ...d, file: d.file ? projectPath(d.file, dir, mainFile) ?? d.file : undefined }));
   if (res.timedOut) diagnostics.unshift({ severity: "error", message: `Compile timed out after ${TIMEOUT_MS / 1000}s` });
+  for (const f of svgs.failed) diagnostics.unshift({ severity: "error", file: projectPath(f, dir, mainFile), message: `Couldn't convert ${f} for \\includesvg. Check it's a valid SVG, or export it as PDF and use \\includegraphics.` });
   if (res.code !== 0 && !diagnostics.some((d) => d.severity === "error")) {
     diagnostics.unshift({ severity: "error", message: lastUsefulLine(res.output) ?? "LaTeX failed — see the raw log" });
   }
