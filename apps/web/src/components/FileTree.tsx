@@ -31,28 +31,51 @@ interface Props {
 /** Drag data type for moving entries inside the tree (distinct from files dragged in from the desktop). */
 const MOVE_TYPE = "application/x-margin-path";
 
-function buildTree(files: FileEntry[]): Node[] {
-  const root: Node = { name: "", path: "", type: "dir", children: [] };
-  const dirs = new Map<string, Node>([["", root]]);
-  const dirOf = (p: string): Node => {
-    if (dirs.has(p)) return dirs.get(p)!;
-    const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-    const node: Node = { name: p.split("/").pop()!, path: p, type: "dir", children: [] };
-    dirs.set(p, node);
-    dirOf(parent).children.push(node);
+/**
+ * Files as a folder tree. With `root` (a document's own folder), paths inside
+ * it are shown relative to it, so the group reads like its own workspace;
+ * nodes keep their full project path for actions.
+ */
+function buildTree(files: FileEntry[], root?: string): Node[] {
+  const top: Node = { name: "", path: root ?? "", type: "dir", children: [] };
+  const dirs = new Map<string, Node>([["", top]]);
+  const full = (rel: string, inside: boolean) => (inside && root ? `${root}/${rel}` : rel);
+  const dirOf = (rel: string, inside: boolean): Node => {
+    const key = `${inside ? "in" : "out"}:${rel}`;
+    if (!rel) return top;
+    if (dirs.has(key)) return dirs.get(key)!;
+    const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    const node: Node = { name: rel.split("/").pop()!, path: full(rel, inside), type: "dir", children: [] };
+    dirs.set(key, node);
+    dirOf(parent, inside).children.push(node);
     return node;
   };
   for (const f of files) {
-    if (f.type === "dir") { dirOf(f.path); continue; }
-    const parentPath = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
-    dirOf(parentPath).children.push({ name: f.path.split("/").pop()!, path: f.path, type: "file", children: [] });
+    const inside = !!root && f.path.startsWith(`${root}/`);
+    const rel = inside ? f.path.slice(root!.length + 1) : f.path;
+    if (f.type === "dir") { dirOf(rel, inside); continue; }
+    const parentRel = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    dirOf(parentRel, inside).children.push({ name: rel.split("/").pop()!, path: f.path, type: "file", children: [] });
   }
   const sort = (nodes: Node[]) => {
     nodes.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     nodes.forEach((n) => sort(n.children));
   };
-  sort(root.children);
-  return root.children;
+  sort(top.children);
+  return top.children;
+}
+
+const dirOfPath = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+
+/**
+ * A document's own folder: the folder its main file is in, when no other
+ * document lives in that folder or below it. Everything inside belongs to it.
+ */
+function ownedRoot(doc: DocumentInfo, all: DocumentInfo[]): string | undefined {
+  const dir = dirOfPath(doc.path);
+  if (!dir) return undefined;
+  const others = all.filter((d) => d.path !== doc.path).map((d) => dirOfPath(d.path));
+  return others.some((o) => o === dir || o.startsWith(`${dir}/`)) ? undefined : dir;
 }
 
 function fileIcon(path: string) {
@@ -62,7 +85,7 @@ function fileIcon(path: string) {
   return "file";
 }
 
-interface Group { id: string; title: string; tag?: string; subtitle?: string; doc?: DocumentInfo; files: FileEntry[]; archived?: boolean }
+interface Group { id: string; title: string; tag?: string; subtitle?: string; doc?: DocumentInfo; files: FileEntry[]; archived?: boolean; root?: string }
 
 /**
  * With several documents, the tree shows one section per document (the files
@@ -80,23 +103,26 @@ function groupByDocument(files: FileEntry[], allDocs: DocumentInfo[]): Group[] {
   // Same title twice: keep the folder/file tag separate so long titles don't truncate it away.
   const groups: Group[] = docs.map((d) => {
     const label = labels.get(d.path) ?? d.title;
-    return { id: `doc:${d.path}`, title: d.title, tag: label !== d.title ? label.slice(d.title.length + 3) : undefined, subtitle: d.path, doc: d, files: [] };
+    return { id: `doc:${d.path}`, title: d.title, tag: label !== d.title ? label.slice(d.title.length + 3) : undefined, subtitle: d.path, doc: d, files: [], root: ownedRoot(d, allDocs) };
   });
-  const archived: Group[] = archivedDocs.map((d) => ({ id: `archived:${d.path}`, title: labels.get(d.path) ?? d.title, subtitle: d.path, doc: d, files: [], archived: true }));
+  const archived: Group[] = archivedDocs.map((d) => ({ id: `archived:${d.path}`, title: labels.get(d.path) ?? d.title, subtitle: d.path, doc: d, files: [], archived: true, root: ownedRoot(d, allDocs) }));
+  // The group whose own folder contains a path (the deepest one), for files no document uses yet.
+  const owner = (p: string) => [...groups, ...archived].filter((g) => g.root && p.startsWith(`${g.root}/`)).sort((a, b) => b.root!.length - a.root!.length)[0];
   const shared: Group = { id: "shared", title: "Shared", subtitle: "Used by more than one document", files: [] };
   const other: Group = { id: "other", title: "Other files", subtitle: "Not used by any document yet: notes, data, unused figures", files: [] };
   const filePaths = files.filter((f) => f.type === "file").map((f) => f.path);
   for (const f of files) {
     if (f.type === "dir") {
-      // Empty folders have nothing to belong to; show them with the other files.
-      if (!filePaths.some((p) => p.startsWith(`${f.path}/`))) other.files.push(f);
+      // Empty folders: inside a document's own folder they belong to it; otherwise they go with the other files.
+      if (filePaths.some((p) => p.startsWith(`${f.path}/`))) continue;
+      (owner(f.path) ?? other).files.push(f);
       continue;
     }
     const u = users.get(f.path) ?? [];
     if (u.length === 1) groups.find((g) => g.doc?.path === u[0])!.files.push(f);
     else if (u.length > 1) shared.files.push(f);
     else if (archivedUsers.has(f.path)) archived.find((g) => g.doc?.path === archivedUsers.get(f.path))!.files.push(f);
-    else other.files.push(f);
+    else (owner(f.path) ?? other).files.push(f);
   }
   return [...groups, shared, other, ...archived].filter((g) => g.files.length || g.archived);
 }
@@ -106,7 +132,7 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
   const [mode, setMode] = useState<"documents" | "folders">(() => load(`treeMode:${projectId}`, "documents"));
   const grouped = mode === "documents" && documents.length > 1;
   const tree = useMemo(() => buildTree(files), [files]);
-  const groups = useMemo(() => (grouped ? groupByDocument(files, documents).map((g) => ({ ...g, tree: buildTree(g.files) })) : []), [grouped, files, documents]);
+  const groups = useMemo(() => (grouped ? groupByDocument(files, documents).map((g) => ({ ...g, tree: buildTree(g.files, g.root) })) : []), [grouped, files, documents]);
   // Which documents use each file (for the Shared group's labels and hover text).
   const usedBy = useMemo(() => {
     const m = new Map<string, DocumentInfo[]>();
@@ -116,7 +142,7 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
   const shortName = (d: DocumentInfo) => d.path.split("/").pop()!.replace(/\.tex$/, "");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(load<string[]>(`collapsed:${projectId}`, [])));
   const [menu, setMenu] = useState<{ x: number; y: number; node: Node | null } | null>(null);
-  const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; doc: DocumentInfo } | null>(null);
+  const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; doc: DocumentInfo; dir: string } | null>(null);
   const [showArchived, setShowArchivedState] = useState(() => load(`showArchived:${projectId}`, false));
   const setShowArchived = (v: boolean) => { setShowArchivedState(v); save(`showArchived:${projectId}`, v); };
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -187,6 +213,20 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
     onDragLeave: (e: DragEvent) => {
       if (!e.currentTarget.contains(e.relatedTarget as globalThis.Node | null)) setDropTarget((d) => (d === dir ? null : d));
     },
+    onDrop: (e: DragEvent) => onDrop(e, dir),
+  });
+  // Dropping on a document's group puts things in that document's folder (highlighting the whole group).
+  const groupDropProps = (key: string, dir: string) => ({
+    onDragOver: (e: DragEvent) => {
+      const moving = e.dataTransfer.types.includes(MOVE_TYPE);
+      if (!moving && !e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (moving && dragging && !canMoveInto(dragging, dir)) { e.dataTransfer.dropEffect = "none"; setDropTarget(null); return; }
+      e.dataTransfer.dropEffect = moving ? "move" : "copy";
+      setDropTarget(key);
+    },
+    onDragLeave: (e: DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as globalThis.Node | null)) setDropTarget((d) => (d === key ? null : d)); },
     onDrop: (e: DragEvent) => onDrop(e, dir),
   });
   const dragProps = (path: string) => ({
@@ -269,11 +309,12 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
             return (
               <div key={g.id}>
                 {firstArchived && <button className="tree-archived-toggle" onClick={() => setShowArchived(false)}><Icon name="chevron" size={11} className="chev open" />Archived · {groups.filter((x) => x.archived).length}</button>}
-                <section className={`tree-group ${g.doc && g.doc.path === activeDoc ? "active" : ""} ${g.archived ? "archived" : ""}`}>
+                <section className={`tree-group ${g.doc && g.doc.path === activeDoc ? "active" : ""} ${g.archived ? "archived" : ""} ${g.doc && dropTarget === `group:${g.id}` ? "drop-target" : ""}`}
+                  {...(g.doc ? groupDropProps(`group:${g.id}`, g.root ?? dirOfPath(g.doc.path)) : {})}>
                   <button className="tree-group-head" onClick={() => toggle(g.archived ? `open:${key}` : key)}
                     title={g.doc ? `${g.subtitle}${g.archived ? " · archived: right-click to restore" : " · double-click to compile · right-click for more"}` : g.subtitle}
                     onDoubleClick={() => g.doc && !g.archived && onAction("compileDoc", g.doc.path)}
-                    onContextMenu={(e) => { if (!g.doc) return; e.preventDefault(); e.stopPropagation(); setGroupMenu({ x: e.clientX, y: e.clientY, doc: g.doc }); }}>
+                    onContextMenu={(e) => { if (!g.doc) return; e.preventDefault(); e.stopPropagation(); setGroupMenu({ x: e.clientX, y: e.clientY, doc: g.doc, dir: g.root ?? dirOfPath(g.doc.path) }); }}>
                     <Icon name="chevron" size={11} className={`chev ${open ? "open" : ""}`} />
                     {g.archived && <Icon name="archive" size={11} className="muted" />}
                     <span className="tree-group-title ellipsis">{g.title}</span>
@@ -300,6 +341,9 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
             ) : (
               <>
                 <button onClick={() => { setGroupMenu(null); onAction("newSection", groupMenu.doc.path); }}><Icon name="plus" size={14} />New section…</button>
+                <button onClick={() => { setGroupMenu(null); onAction("newFile", groupMenu.dir); }}><Icon name="file" size={14} />New file here…</button>
+                <button onClick={() => { setGroupMenu(null); onAction("newFolder", groupMenu.dir); }}><Icon name="folderPlus" size={14} />New folder here…</button>
+                <button onClick={() => { setGroupMenu(null); onAction("upload", groupMenu.dir); }}><Icon name="upload" size={14} />Upload here…</button>
                 {groupMenu.doc.path !== activeDoc && <button onClick={() => { setGroupMenu(null); onAction("compileDoc", groupMenu.doc.path); }}><Icon name="play" size={14} />Compile this document</button>}
                 <div className="menu-sep" />
                 <button onClick={() => { setGroupMenu(null); onAction("renameDoc", groupMenu.doc.path); }}><Icon name="file" size={14} />Rename group…</button>
