@@ -28,6 +28,8 @@ export interface DocumentInfo {
   hasPdf: boolean;
   /** e.g. "beamer", "article". */
   docClass?: string;
+  /** The title was set in Margin (Rename group), not taken from \\title. */
+  customTitle?: boolean;
   /** Project files this document uses: its \\input/\\include tree, figures, .bib, local .cls/.sty. Includes the root. */
   files?: string[];
 }
@@ -41,6 +43,23 @@ export const DOCUMENT_TEMPLATES = [
   { id: "blank", label: "Blank", hint: "Just \\documentclass" },
 ] as const;
 export type DocumentTemplate = (typeof DOCUMENT_TEMPLATES)[number]["id"];
+
+/**
+ * Display names for documents, made unique: when two documents share a title
+ * (e.g. copies of the paper in two folders), add the folder or file name.
+ */
+export function documentLabels(docs: Pick<DocumentInfo, "path" | "title">[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const dirOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+  for (const d of docs) {
+    const twins = docs.filter((x) => x.title.trim().toLowerCase() === d.title.trim().toLowerCase());
+    if (twins.length < 2) { out.set(d.path, d.title); continue; }
+    const dir = dirOf(d.path);
+    const sameDir = twins.filter((x) => dirOf(x.path) === dir).length > 1;
+    out.set(d.path, `${d.title} · ${sameDir || !dir ? d.path.split("/").pop() : dir.split("/").pop()}`);
+  }
+  return out;
+}
 
 /** \documentclass that isn't commented out → this .tex is a document root. Returns the class name. */
 export function documentClassOf(tex: string): string | null {

@@ -1,11 +1,11 @@
 import { useMemo, useState, type DragEvent, type MouseEvent } from "react";
-import { isTextPath, type DocumentInfo, type FileEntry } from "@margin/shared";
+import { documentLabels, isTextPath, type DocumentInfo, type FileEntry } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
 import { load, save } from "../lib/storage.ts";
 import type { Peer } from "../lib/collab.ts";
 import { Avatar } from "./Presence.tsx";
 
-export type TreeAction = "newFile" | "newFolder" | "upload" | "rename" | "delete" | "setMain" | "compileDoc" | "download";
+export type TreeAction = "newFile" | "newFolder" | "upload" | "rename" | "delete" | "setMain" | "compileDoc" | "download" | "renameDoc" | "resetDocName";
 
 interface Node { name: string; path: string; type: "file" | "dir"; children: Node[] }
 
@@ -60,7 +60,7 @@ function fileIcon(path: string) {
   return "file";
 }
 
-interface Group { id: string; title: string; subtitle?: string; doc?: DocumentInfo; files: FileEntry[] }
+interface Group { id: string; title: string; tag?: string; subtitle?: string; doc?: DocumentInfo; files: FileEntry[] }
 
 /**
  * With several documents, the tree shows one section per document (the files
@@ -69,9 +69,14 @@ interface Group { id: string; title: string; subtitle?: string; doc?: DocumentIn
 function groupByDocument(files: FileEntry[], docs: DocumentInfo[]): Group[] {
   const users = new Map<string, string[]>();
   for (const d of docs) for (const f of d.files ?? [d.path]) users.set(f, [...(users.get(f) ?? []), d.path]);
-  const groups: Group[] = docs.map((d) => ({ id: `doc:${d.path}`, title: d.title, subtitle: d.path, doc: d, files: [] }));
+  const labels = documentLabels(docs);
+  // Same title twice: keep the folder/file tag separate so long titles don't truncate it away.
+  const groups: Group[] = docs.map((d) => {
+    const label = labels.get(d.path) ?? d.title;
+    return { id: `doc:${d.path}`, title: d.title, tag: label !== d.title ? label.slice(d.title.length + 3) : undefined, subtitle: d.path, doc: d, files: [] };
+  });
   const shared: Group = { id: "shared", title: "Shared", subtitle: "Used by more than one document", files: [] };
-  const other: Group = { id: "other", title: "Other files", subtitle: "Not used by any document", files: [] };
+  const other: Group = { id: "other", title: "Other files", subtitle: "Not used by any document yet: notes, data, unused figures", files: [] };
   const filePaths = files.filter((f) => f.type === "file").map((f) => f.path);
   for (const f of files) {
     if (f.type === "dir") {
@@ -93,8 +98,16 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
   const grouped = mode === "documents" && documents.length > 1;
   const tree = useMemo(() => buildTree(files), [files]);
   const groups = useMemo(() => (grouped ? groupByDocument(files, documents).map((g) => ({ ...g, tree: buildTree(g.files) })) : []), [grouped, files, documents]);
+  // Which documents use each file (for the Shared group's labels and hover text).
+  const usedBy = useMemo(() => {
+    const m = new Map<string, DocumentInfo[]>();
+    for (const d of documents) for (const f of d.files ?? [d.path]) m.set(f, [...(m.get(f) ?? []), d]);
+    return m;
+  }, [documents]);
+  const shortName = (d: DocumentInfo) => d.path.split("/").pop()!.replace(/\.tex$/, "");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(load<string[]>(`collapsed:${projectId}`, [])));
   const [menu, setMenu] = useState<{ x: number; y: number; node: Node | null } | null>(null);
+  const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; doc: DocumentInfo } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
 
@@ -166,6 +179,7 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
               <Icon name="chevron" size={12} className={`chev ${open ? "open" : ""}`} />
               <Icon name="folder" size={14} className="tree-icon" />
               <span className="tree-name">{n.name}</span>
+              {!n.children.length && <span className="muted small">empty</span>}
             </button>
             {open && renderNodes(n.children, depth + 1, scope)}
           </div>
@@ -178,7 +192,9 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
           style={pad}
           onClick={() => onOpen(n.path)}
           onContextMenu={(e) => openMenu(e, n)}
-          title={n.path}
+          title={documents.length > 1 && !docPaths.includes(n.path)
+            ? `${n.path}\n${usedBy.get(n.path)?.length ? `Used by ${usedBy.get(n.path)!.map((d) => d.path).join(", ")}` : "Not used by any document"}`
+            : n.path}
           {...dragProps(n.path)}
         >
           <span className="chev-space" />
@@ -186,6 +202,7 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
           <span className={`tree-name ${isTextPath(n.path) ? "" : "muted"}`}>{n.name}</span>
           {n.path === mainFile ? <span className={`badge ${activeDoc === n.path ? "" : "dim"}`} title="Default document">main</span>
             : docPaths.includes(n.path) && <span className={`badge ${activeDoc === n.path ? "" : "dim"}`} title={activeDoc === n.path ? "The document you're compiling" : "A document: right-click to compile it"}>doc</span>}
+          {scope === "shared" && usedBy.get(n.path)?.map((d) => <span key={d.path} className="used-by" title={`Used by ${d.path}`}>{shortName(d)}</span>)}
           {peersByFile.get(n.path)?.slice(0, 3).map((p) => <Avatar key={p.clientId} name={p.user.name} agent={p.user.agent} size="xs" title={p.user.agent ? p.user.name : `${p.user.name} is editing`} />)}
           {dirty.has(n.path) && <span className="dot" title="Sending edits…" />}
         </button>
@@ -209,10 +226,12 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
             const open = !collapsed.has(key);
             return (
               <section key={g.id} className={`tree-group ${g.doc && g.doc.path === activeDoc ? "active" : ""}`}>
-                <button className="tree-group-head" onClick={() => toggle(key)} title={g.doc ? `${g.subtitle} · double-click to compile` : g.subtitle}
-                  onDoubleClick={() => g.doc && onAction("compileDoc", g.doc.path)}>
+                <button className="tree-group-head" onClick={() => toggle(key)} title={g.doc ? `${g.subtitle} · double-click to compile · right-click to rename` : g.subtitle}
+                  onDoubleClick={() => g.doc && onAction("compileDoc", g.doc.path)}
+                  onContextMenu={(e) => { if (!g.doc) return; e.preventDefault(); e.stopPropagation(); setGroupMenu({ x: e.clientX, y: e.clientY, doc: g.doc }); }}>
                   <Icon name="chevron" size={11} className={`chev ${open ? "open" : ""}`} />
                   <span className="tree-group-title ellipsis">{g.title}</span>
+                  {g.tag && <span className="tree-group-tag" title={g.subtitle}>{g.tag}</span>}
                   {g.doc && g.doc.path === activeDoc && <span className="tree-group-live" title="The document you're compiling" />}
                   <span className="tree-group-count">{g.files.filter((f) => f.type === "file").length}</span>
                 </button>
@@ -222,6 +241,17 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
           })
         : renderNodes(tree, 0, "")}
       <div className="tree-hint">Drag onto a folder to move · drop files from your computer to upload</div>
+      {groupMenu && (
+        <>
+          <div className="menu-backdrop" onClick={() => setGroupMenu(null)} onContextMenu={(e) => { e.preventDefault(); setGroupMenu(null); }} />
+          <div className="menu" style={{ left: groupMenu.x, top: Math.min(groupMenu.y, window.innerHeight - 200) }}>
+            <button onClick={() => { setGroupMenu(null); onAction("renameDoc", groupMenu.doc.path); }}><Icon name="file" size={14} />Rename group…</button>
+            {groupMenu.doc.customTitle && <button onClick={() => { setGroupMenu(null); onAction("resetDocName", groupMenu.doc.path); }}><Icon name="history" size={14} />Use the LaTeX \title again</button>}
+            {groupMenu.doc.path !== activeDoc && <button onClick={() => { setGroupMenu(null); onAction("compileDoc", groupMenu.doc.path); }}><Icon name="play" size={14} />Compile this document</button>}
+            {!groupMenu.doc.isDefault && <button onClick={() => { setGroupMenu(null); onAction("setMain", groupMenu.doc.path); }}><Icon name="star" size={14} />Make default document</button>}
+          </div>
+        </>
+      )}
       {menu && (
         <>
           <div className="menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
@@ -246,7 +276,7 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
             </button>
             {menu.node && (
               <>
-                <button onClick={() => act("rename", menu.node!.path)}><Icon name="file" size={14} />Rename or move…</button>
+                <button onClick={() => act("rename", menu.node!.path)}><Icon name={menu.node.type === "dir" ? "folder" : "file"} size={14} />{menu.node.type === "dir" ? "Rename folder…" : "Rename or move…"}</button>
                 <button className="danger" onClick={() => act("delete", menu.node!.path)}><Icon name="x" size={14} />Delete</button>
               </>
             )}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { DOCUMENT_TEMPLATES, type DocumentInfo, type Engine } from "@margin/shared";
+import { DOCUMENT_TEMPLATES, documentLabels, type DocumentInfo, type Engine } from "@margin/shared";
 import { Modal } from "./Dialog.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
 
@@ -26,6 +26,7 @@ export function DocumentSwitcher({ docs, active, onSelect, onCreate, onSetEngine
   const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   const current = docs.find((d) => d.path === active);
+  const labels = documentLabels(docs);
 
   useEffect(() => { if (openSignal) setOpen(true); }, [openSignal]);
   useEffect(() => {
@@ -56,7 +57,7 @@ export function DocumentSwitcher({ docs, active, onSelect, onCreate, onSetEngine
               <button className="doc-pick" onClick={() => { onSelect(d.path); setOpen(false); }}>
                 <span className={`doc-kind k-${(d.docClass ?? "x").toLowerCase()}`}>{kindOf(d)}</span>
                 <span className="doc-text">
-                  <span className="doc-title ellipsis">{d.title}</span>
+                  <span className="doc-title ellipsis">{labels.get(d.path) ?? d.title}</span>
                   <span className="muted small ellipsis">{d.path}{d.isDefault ? " · default" : ""}{d.hasPdf ? "" : " · not compiled"}</span>
                 </span>
                 {d.path === active && <Icon name="check" size={14} />}

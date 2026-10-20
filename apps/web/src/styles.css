@@ -1126,3 +1126,5 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
   .history-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: 40% 60%; }
   .history-list { border-right: none; border-bottom: 1px solid var(--border); }
 }
+.used-by { font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 4px; color: var(--accent); background: var(--accent-soft); flex-shrink: 0; max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-group-tag { flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none; padding: 1px 5px; border-radius: 4px; background: var(--hover); color: var(--text-muted); }

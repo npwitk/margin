@@ -362,6 +362,19 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         case "compileDoc":
           selectDoc(path);
           break;
+        case "renameDoc": {
+          const doc = docs.find((d) => d.path === path);
+          const title = await ask({ title: "Rename group", label: `A name for ${path} in the file tree and document menu. It doesn't change the LaTeX \\title.`, initial: doc?.title ?? "", confirm: "Rename" });
+          if (title === null || title === doc?.title) return;
+          const r = await api.updateDocument(projectId, { path, title });
+          setDocs(r.documents);
+          break;
+        }
+        case "resetDocName": {
+          const r = await api.updateDocument(projectId, { path, title: "" });
+          setDocs(r.documents);
+          break;
+        }
       }
     } catch (err) {
       notify((err as Error).message);

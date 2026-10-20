@@ -96,6 +96,7 @@ export async function listDocuments(projectId: string): Promise<DocumentInfo[]> 
       isDefault: f.path === project.mainFile,
       hasPdf: await stat(pdfPathOf(projectId, f.path)).then(() => true, () => false),
       docClass: cls ?? undefined,
+      customTitle: !!s?.title,
       files: await documentFiles(projectId, f.path, all),
     });
   }
