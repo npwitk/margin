@@ -62,6 +62,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [showProblems, setShowProblems] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyKey, setHistoryKey] = useState(0);
   const [localOpen, setLocalOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   // Markdown files open rendered; this remembers which ones you switched to the source.
@@ -161,6 +162,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     const onEvent = (e: { keysChanged: Set<string>; transaction: { local: boolean } }) => {
       if (e.transaction.local) return;
       if (e.keysChanged.has("filesVersion")) { void refreshFiles(); void refreshDocs(); }
+      if (e.keysChanged.has("historyVersion")) setHistoryKey((k) => k + 1);
       const last = events.get("lastCompile") as { by: string; ok: boolean; doc?: string } | undefined;
       if (e.keysChanged.has("lastCompile") && last && last.by !== session.name) {
         const doc = last.doc ?? projectRef.current?.mainFile;
@@ -481,7 +483,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const commands = useMemo<Command[]>(() => {
     const cmds: Command[] = [
       { id: "compile", label: "Compile", section: "Action", icon: "play", hint: `${MOD}S`, run: compile },
-      { id: "checkpoint", label: "Create checkpoint…", section: "Action", icon: "history", run: () => setHistoryOpen(true) },
+      { id: "checkpoint", label: "Version history: save, compare, restore…", section: "Action", icon: "history", run: () => setHistoryOpen(true) },
       { id: "library", label: "Open reference library", section: "Action", icon: "book", run: () => navigate({ name: "library", project: projectId }) },
       { id: "ai-review", label: "AI review of the paper", section: "AI", icon: "star", run: () => setView("review") },
       { id: "assistant", label: "Ask Claude…", section: "AI", icon: "comment", run: () => { setView("write"); setPreviewTab("assistant"); } },
@@ -563,7 +565,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         )}
         <button className="btn ghost" onClick={() => setShareOpen(true)} title="Members and invite links"><Icon name="plus" size={14} />Share</button>
         <button className="btn ghost" onClick={() => setLocalOpen(true)} title="Clone with git / work with agents"><Icon name="terminal" size={14} />Local</button>
-        <button className="btn ghost" onClick={() => setHistoryOpen(true)} title="Checkpoints"><Icon name="history" size={14} />Checkpoint</button>
+        <button className="btn ghost" onClick={() => setHistoryOpen(true)} title="Version history: what changed, who changed it, restore"><Icon name="history" size={14} />History</button>
         <button className="btn ghost" onClick={() => setPaletteOpen(true)} title="Command palette"><kbd>{MOD}K</kbd></button>
         <button className="btn primary" onClick={compile} disabled={compiling} title={`Compile (${MOD}S)`}>
           {compiling ? <Spinner /> : <Icon name="play" size={13} />}
@@ -728,7 +730,9 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         }}
       />
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
-      {historyOpen && <HistoryPanel projectId={projectId} onClose={() => setHistoryOpen(false)} beforeCheckpoint={() => collab.flush()} />}
+      {historyOpen && <HistoryPanel projectId={projectId} onClose={() => setHistoryOpen(false)} beforeCheckpoint={() => collab.flush()} refreshKey={historyKey}
+        onOpenFile={(p) => { setHistoryOpen(false); openFile(p); }}
+        onRestored={(msg) => { notify(msg); void refreshFiles(); void refreshDocs(); compile(); }} />}
       {aiSettingsOpen && <AiSettingsDialog settings={aiSettings} onChange={setAiSettings} onClose={() => setAiSettingsOpen(false)} />}
       {newDocOpen && <NewDocumentDialog defaultDir={(project.mainFile.includes("/") ? project.mainFile.slice(0, project.mainFile.lastIndexOf("/")) : ".")} onCreate={createDoc} onClose={() => setNewDocOpen(false)} />}
       {shareOpen && <ShareDialog projectId={projectId} session={session} onClose={() => setShareOpen(false)} />}

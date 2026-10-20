@@ -8,6 +8,7 @@ import { parseSigned } from "hono/utils/cookie";
 import { WebSocketServer } from "ws";
 import * as Y from "yjs";
 import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type RoomEvents, type Session, type Task, type TaskComment } from "@margin/shared";
+import { editorName, recordEdit } from "./versions.ts";
 import { DATA_DIR, SECRET } from "./config.ts";
 import { HttpError, projectDir, resolvePath } from "./storage.ts";
 import { canAccess } from "./access.ts";
@@ -161,6 +162,14 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
     // Save the state right away: a restart before the first edit must not lose it.
     if (!state) await writeAtomic(ystatePath(documentName), Y.encodeStateAsUpdate(document)).catch((err) => console.error(`ystate ${documentName}:`, err));
     return document;
+  },
+
+  // Remember who edited which file, for version history credit and auto-saves.
+  async onChange({ documentName, context }) {
+    const t = parseDocName(documentName);
+    const session = (context as CollabContext | undefined)?.session;
+    if (!t || t.path === ROOM || !session?.name) return;
+    recordEdit(t.projectId, t.path, editorName(session));
   },
 
   async onStoreDocument({ document, documentName }) {

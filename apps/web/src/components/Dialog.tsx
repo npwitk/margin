@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export interface PromptRequest {
   title: string;
@@ -47,8 +47,24 @@ export function PromptDialog({ req, onDone }: { req: PromptRequest; onDone(): vo
 }
 
 export function Modal({ children, onClose, wide, className }: { children: ReactNode; onClose(): void; wide?: boolean; className?: string }) {
+  // Escape closes the dialog even when focus has left it (e.g. a button got disabled while saving).
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Only the topmost dialog closes; menus inside it handle their own Escape first.
+      const overlays = document.querySelectorAll(".overlay");
+      if (overlays[overlays.length - 1] !== ref.current) return;
+      e.preventDefault();
+      close.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const ref = useRef<HTMLDivElement>(null);
   return (
-    <div className="overlay" onMouseDown={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+    <div className="overlay" ref={ref} onMouseDown={onClose}>
       <div className={`modal ${wide ? "wide" : ""} ${className ?? ""}`} onMouseDown={(e) => e.stopPropagation()}>{children}</div>
     </div>
   );

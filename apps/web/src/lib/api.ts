@@ -1,4 +1,5 @@
 import type {
+  CheckpointFileDiff, PendingChanges,
   DocumentInfo,
   CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
   AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
@@ -146,6 +147,8 @@ export const api = {
   removeWorkspaceMember: (login: string) => req(`/workspace/members/${encodeURIComponent(login)}`, { method: "DELETE" }),
   setWorkspaceRole: (login: string, role: "admin" | "member") => req(`/workspace/members/${encodeURIComponent(login)}`, json("PATCH", { role })),
 
-  history: (id: string) => req<Checkpoint[]>(`${P(id)}/history`),
+  history: (id: string, skip = 0) => req<{ versions: Checkpoint[]; pending: PendingChanges | null }>(`${P(id)}/history${skip ? `?skip=${skip}` : ""}`),
+  versionChanges: (id: string, hash: string) => req<CheckpointFileDiff[]>(`${P(id)}/history/${hash}`),
+  restoreVersion: (id: string, hash: string, path?: string) => req<{ restored: number; checkpoint: Checkpoint | null }>(`${P(id)}/history/${hash}/restore`, json("POST", { path })),
   checkpoint: (id: string, message: string) => req<{ checkpoint: Checkpoint | null }>(`${P(id)}/checkpoint`, json("POST", { message })),
 };

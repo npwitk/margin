@@ -94,12 +94,32 @@ export interface SyncTexInverse {
   line: number;
 }
 
+/** A saved version of the whole project (a git commit). */
 export interface Checkpoint {
   hash: string;
   author: string;
   date: string;
   message: string;
+  /** Everyone whose edits are in this version (author first). */
+  people?: string[];
+  /** "named": someone saved it on purpose; "auto": saved after editing went quiet; "restore": a restore. */
+  kind?: "named" | "auto" | "restore" | "other";
+  files?: { path: string; additions: number; deletions: number }[];
 }
+
+export interface CheckpointFileDiff {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  from?: string;
+  binary: boolean;
+  additions: number;
+  deletions: number;
+  /** Unified diff hunks (without the file header); truncated for huge files. */
+  patch: string;
+}
+
+/** Edits not saved in a version yet. */
+export interface PendingChanges { people: string[]; files: string[]; since: number }
 
 export interface Session {
   name: string;
@@ -248,6 +268,8 @@ export interface PresenceState {
 export interface RoomEvents {
   filesVersion?: number;
   lastCompile?: { by: string; at: number; ok: boolean; doc?: string };
+  /** A version was saved (history changed). */
+  historyVersion?: number;
 }
 
 /** Collaboration document names: one per text file, plus one room per project. */

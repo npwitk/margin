@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import type { Context } from "hono";
 import { PROJECTS_DIR } from "./config.ts";
 import { flushProject, pauseProject, resumeProject } from "./collab.ts";
+import { saveVersion } from "./versions.ts";
 import { checkpoint, withGitLock } from "./git.ts";
 import { head, mergePushed } from "./pushMerge.ts";
 import { projectDir } from "./storage.ts";
@@ -55,7 +56,7 @@ async function memberFrom(c: Context): Promise<{ name: string; github?: string }
 /** Commit whatever collaborators have typed since the last checkpoint. */
 async function syncLiveEdits(id: string) {
   await flushProject(id);
-  await checkpoint(projectDir(id), "Sync live edits", "Margin");
+  await checkpoint(projectDir(id), "Sync live edits", "Margin", { kind: "auto" });
 }
 
 export async function handleGit(c: Context) {
@@ -78,7 +79,11 @@ export async function handleGit(c: Context) {
   await ensureConfig(dir);
   // Fetches see live edits. (Not before pushes: that would move the branch
   // under the pusher and make their push look out of date.)
-  if (service === "git-upload-pack" && rest === "/info/refs") await withGitLock(id, () => syncLiveEdits(id));
+  if (service === "git-upload-pack" && rest === "/info/refs") {
+    // Save what people typed as a version, credited to them, before git reads the repo (outside the lock: it takes it).
+    await saveVersion(id).catch(() => null);
+    await withGitLock(id, () => syncLiveEdits(id));
+  }
 
   const run = async (): Promise<{ response: Response; finished: Promise<unknown> }> => {
     const oldHead = isPush ? await head(dir) : null;

@@ -9,6 +9,7 @@ import { logger } from "hono/logger";
 import type { Server } from "node:http";
 import { authRoutes, requireSession, type AppEnv } from "./auth.ts";
 import { attachCollab, shutdownCollab } from "./collab.ts";
+import { saveAllPending } from "./versions.ts";
 import { ACCESS_MODE, DATA_DIR, GITHUB, INVITE_ONLY, OPEN_ACCESS, PASSWORD, PROJECTS_DIR, PUBLIC_URL, WEB_DIST } from "./config.ts";
 import { aiProjectRoutes, aiSettingsRoutes } from "./ai/routes.ts";
 import { handleGit } from "./gitHttp.ts";
@@ -81,6 +82,7 @@ attachCollab(server as Server);
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, async () => {
     await shutdownCollab().catch((err) => console.error("shutdown:", err));
+    await saveAllPending().catch((err) => console.error("shutdown versions:", err));
     process.exit(0);
   });
 }

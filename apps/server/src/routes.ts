@@ -13,7 +13,8 @@ import type { AppEnv } from "./auth.ts";
 import { compileProject, compileWorker } from "./compile.ts";
 import { createDocument, listDocuments, pdfPathOf, renameDocuments, resolveDocument, updateDocument } from "./documents.ts";
 import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
-import { checkpoint, history, withGitLock } from "./git.ts";
+import { changesIn, withGitLock } from "./git.ts";
+import { editorName, listVersions, pendingChanges, recordEdit, restoreVersion, saveVersion } from "./versions.ts";
 import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
 import { addOwner, canAccess, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
@@ -123,6 +124,7 @@ export const projectRoutes = new Hono<AppEnv>()
     const exists = await stat(resolvePath(id, rel)).then(() => true, () => false);
     if (!exists || !isTextPath(rel)) {
       const res = await writeText(id, rel, content, baseEtag);
+      recordEdit(id, rel, editorName(c.get("session")));
       if (!exists) emit(id, "filesVersion", Date.now());
       return c.json(res);
     }
@@ -177,6 +179,7 @@ export const projectRoutes = new Hono<AppEnv>()
   .post("/:id/entries", async (c) => {
     const { path: rel, type } = await c.req.json<{ path: string; type: "file" | "dir" }>();
     await createEntry(c.req.param("id"), rel, type === "dir" ? "dir" : "file");
+    recordEdit(c.req.param("id"), rel, editorName(c.get("session")));
     emit(c.req.param("id"), "filesVersion", Date.now());
     return c.json({ ok: true }, 201);
   })
@@ -188,6 +191,7 @@ export const projectRoutes = new Hono<AppEnv>()
     await releasePath(id, from);
     await moveEntry(id, from, to);
     await renameDocuments(id, (p) => (p === from ? to : p.startsWith(`${from}/`) ? `${to}${p.slice(from.length)}` : p));
+    recordEdit(id, to, editorName(c.get("session")));
     emit(id, "filesVersion", Date.now());
     return c.json({ ok: true });
   })
@@ -198,6 +202,7 @@ export const projectRoutes = new Hono<AppEnv>()
     await releasePath(id, rel);
     await deleteEntry(id, rel);
     await renameDocuments(id, (p) => (p === rel || p.startsWith(`${rel}/`) ? null : p));
+    recordEdit(id, rel, editorName(c.get("session")));
     emit(id, "filesVersion", Date.now());
     return c.json({ ok: true });
   })
@@ -218,6 +223,7 @@ export const projectRoutes = new Hono<AppEnv>()
       if (existing && isTextPath(rel)) await writeThroughCollab(id, rel, data.toString("utf8"), c.get("session"));
       else await writeBinary(id, rel, data);
       saved.push(rel);
+      recordEdit(id, rel, editorName(c.get("session")));
     }
     emit(id, "filesVersion", Date.now());
     return c.json({ saved });
@@ -341,14 +347,24 @@ export const projectRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  // ── Checkpoints (git) ────────────────────────────────────────────────────
-  .get("/:id/history", async (c) => c.json(await history(projectDir(c.req.param("id")))))
+  // ── Version history (git) ────────────────────────────────────────────
+  .get("/:id/history", async (c) => {
+    const id = c.req.param("id");
+    const skip = Math.max(0, Number(c.req.query("skip")) || 0);
+    return c.json({ versions: await listVersions(id, 60, skip), pending: pendingChanges(id) });
+  })
+  .get("/:id/history/:hash", async (c) => c.json(await changesIn(projectDir(c.req.param("id")), c.req.param("hash")).catch(() => { throw new HttpError(404, "Version not found"); })))
+  .post("/:id/history/:hash/restore", limit("restore", 30, 600), async (c) => {
+    const { path: file } = await c.req.json<{ path?: string }>().catch(() => ({ path: undefined }));
+    return c.json(await restoreVersion(c.req.param("id"), c.req.param("hash"), c.get("session"), file || undefined));
+  })
 
+  /** Save a named version now (everyone's unsaved edits, credited to them). */
   .post("/:id/checkpoint", async (c) => {
     const id = c.req.param("id");
     const { message } = await c.req.json<{ message?: string }>().catch(() => ({ message: undefined }));
-    await flushProject(id);
-    const cp = await withGitLock(id, () => checkpoint(projectDir(id), (message ?? "").trim().slice(0, 200), c.get("session").name));
+    const name = (message ?? "").trim().slice(0, 200);
+    const cp = await saveVersion(id, { message: name || undefined, by: c.get("session").name, kind: name ? "named" : "auto" });
     if (cp) await touchProject(id);
     return c.json({ checkpoint: cp });
   });
