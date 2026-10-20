@@ -161,7 +161,7 @@ const DEFS: Record<string, Def> = {
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
       const docs = await listDocuments(ctx.projectId);
-      const lines = docs.map((d) => `${d.path}: "${d.title}" (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}${d.hasPdf ? "" : " (not compiled yet)"}`);
+      const lines = docs.map((d) => `${d.path}: "${d.title}" (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}${d.archived ? " [archived]" : ""}${d.hasPdf ? "" : " (not compiled yet)"}`);
       return { summary: `Listed ${docs.length} document${docs.length === 1 ? "" : "s"}`, content: lines.join("\n") || "(no documents)" };
     },
   },

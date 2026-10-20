@@ -72,9 +72,10 @@ export const api = {
   inverse: (id: string, page: number, x: number, y: number, doc?: string) =>
     req<SyncTexInverse | null>(`${P(id)}/synctex/inverse?page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}${doc ? `&doc=${q(doc)}` : ""}`),
   documents: (id: string) => req<DocumentInfo[]>(`${P(id)}/documents`),
-  createDocument: (id: string, body: { title?: string; template?: string; path?: string }) =>
+  createDocument: (id: string, body: { title?: string; template?: string; path?: string; layout?: "folder" | "beside"; copyFrom?: string }) =>
     req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("POST", body)),
-  updateDocument: (id: string, body: { path: string; engine?: Engine; title?: string; makeDefault?: boolean }) =>
+  addSection: (id: string, doc: string, title: string) => req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents/section`, json("POST", { doc, title })),
+  updateDocument: (id: string, body: { path: string; engine?: Engine; title?: string; makeDefault?: boolean; archived?: boolean }) =>
     req<{ project: Project; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("PATCH", body)),
 
   tokens: () => req<AccessToken[]>("/tokens"),

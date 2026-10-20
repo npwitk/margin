@@ -41,6 +41,11 @@ async function exists(p: string) {
   return !!(await stat(p).catch(() => null));
 }
 
+/** A regular file (not a folder that took the old file's name). */
+async function isFile(p: string) {
+  return !!(await stat(p).catch(() => null))?.isFile();
+}
+
 async function writeAtomic(file: string, data: string | Uint8Array) {
   await mkdir(path.dirname(file), { recursive: true });
   // Unique per write: two saves of the same file may overlap.
@@ -93,7 +98,7 @@ async function persist(name: string, doc: Y.Doc, { withState = true } = {}) {
     if ((await readFile(t.file, "utf8").catch(() => "")) !== json) await writeAtomic(t.file, json);
   } else {
     // Renamed/deleted while open: don't resurrect it.
-    if (!(await exists(t.file))) return;
+    if (!(await isFile(t.file))) return;
     const text = doc.getText("content").toString();
     if ((await readFile(t.file, "utf8").catch(() => null)) !== text) await writeAtomic(t.file, text);
   }
@@ -126,7 +131,7 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
     if (!session) throw new Error("unauthorized");
     const t = target(documentName);
     if (!(await exists(path.join(projectDir(t.projectId), ".margin", "project.json")))) throw new Error("no such project");
-    if (!t.room && !(await exists(t.file))) throw new Error("no such file");
+    if (!t.room && !(await isFile(t.file))) throw new Error("no such file");
     if (!(await isActiveMember(session)) || !(await canAccess(t.projectId, session))) throw new Error("no such project");
     return { session };
   },
@@ -182,7 +187,8 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
 /** Write every open document of a project (files and board) to disk now, before compile/checkpoint. */
 export async function flushProject(projectId: string) {
   const open = [...hocuspocus.documents.entries()].filter(([name]) => name.startsWith(`${projectId}/`));
-  await Promise.all(open.map(([name, doc]) => persist(name, doc, { withState: false })));
+  // One broken document (e.g. a file replaced by a folder) mustn't stop the others or the compile.
+  await Promise.all(open.map(([name, doc]) => persist(name, doc, { withState: false }).catch((err) => console.error(`flush ${name}:`, err))));
 }
 
 /** Current text of a file: the live document if someone has it open, otherwise null (read the disk). */

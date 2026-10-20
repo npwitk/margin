@@ -11,7 +11,7 @@ import {
 } from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
 import { compileProject, compileWorker } from "./compile.ts";
-import { createDocument, listDocuments, pdfPathOf, renameDocuments, resolveDocument, updateDocument } from "./documents.ts";
+import { addSection, createDocument, listDocuments, pdfPathOf, renameDocuments, resolveDocument, updateDocument } from "./documents.ts";
 import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
 import { changesIn, withGitLock } from "./git.ts";
 import { editorName, listVersions, pendingChanges, recordEdit, restoreVersion, saveVersion } from "./versions.ts";
@@ -239,14 +239,22 @@ export const projectRoutes = new Hono<AppEnv>()
   .get("/:id/documents", async (c) => c.json(await listDocuments(c.req.param("id"))))
   .post("/:id/documents", limit("create", 30, 3600), async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json<{ title?: string; template?: string; path?: string; engine?: Engine }>();
+    const body = await c.req.json<{ title?: string; template?: string; path?: string; engine?: Engine; layout?: "folder" | "beside"; copyFrom?: string }>();
     const created = await createDocument(id, body);
     emit(id, "filesVersion", Date.now());
     return c.json({ path: created, documents: await listDocuments(id) }, 201);
   })
+  .post("/:id/documents/section", async (c) => {
+    const id = c.req.param("id");
+    const { doc, title } = await c.req.json<{ doc: string; title: string }>();
+    const file = await addSection(id, doc, title ?? "", c.get("session"));
+    recordEdit(id, file, editorName(c.get("session")));
+    emit(id, "filesVersion", Date.now());
+    return c.json({ path: file, documents: await listDocuments(id) }, 201);
+  })
   .patch("/:id/documents", async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json<{ path: string; engine?: Engine; title?: string; makeDefault?: boolean }>();
+    const body = await c.req.json<{ path: string; engine?: Engine; title?: string; makeDefault?: boolean; archived?: boolean }>();
     const project = await updateDocument(id, body.path, body);
     return c.json({ project, documents: await listDocuments(id) });
   })

@@ -1,11 +1,12 @@
-import { stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
-  DOCUMENT_TEMPLATES, documentClassOf, documentTitleOf,
-  type DocumentInfo, type DocumentSettings, type DocumentTemplate, type Engine, type Project,
+  DOCUMENT_TEMPLATES, documentClassOf, documentTitleOf, isTextPath,
+  type DocumentInfo, type DocumentSettings, type DocumentTemplate, type Engine, type Project, type Session,
 } from "@margin/shared";
 import { textFiles, textOf } from "./ai/paper.ts";
-import { HttpError, getProject, listFiles, resolvePath, saveProject, workDir, writeText } from "./storage.ts";
+import { withDoc } from "./collab.ts";
+import { HttpError, getProject, listFiles, resolvePath, saveProject, workDir, writeBinary, writeText } from "./storage.ts";
 
 /**
  * A project can hold several LaTeX documents: the paper, slides, a cover
@@ -97,6 +98,7 @@ export async function listDocuments(projectId: string): Promise<DocumentInfo[]> 
       hasPdf: await stat(pdfPathOf(projectId, f.path)).then(() => true, () => false),
       docClass: cls ?? undefined,
       customTitle: !!s?.title,
+      archived: !!s?.archived && f.path !== project.mainFile,
       files: await documentFiles(projectId, f.path, all),
     });
   }
@@ -118,7 +120,7 @@ export async function resolveDocument(projectId: string, doc?: string | null): P
 }
 
 /** Change a document's engine or title, or make it the default. */
-export async function updateDocument(projectId: string, doc: string, patch: { engine?: Engine; title?: string; makeDefault?: boolean }) {
+export async function updateDocument(projectId: string, doc: string, patch: { engine?: Engine; title?: string; makeDefault?: boolean; archived?: boolean }) {
   const { path: target } = await resolveDocument(projectId, doc);
   const p = await getProject(projectId);
   const list = (p.documents ?? []).filter((d) => d.path !== target);
@@ -128,12 +130,17 @@ export async function updateDocument(projectId: string, doc: string, patch: { en
     cur.engine = patch.engine;
   }
   if (patch.title !== undefined) cur.title = patch.title.trim().slice(0, 120) || undefined;
+  if (patch.archived !== undefined) {
+    if (patch.archived && target === p.mainFile) throw new HttpError(400, "That's the default document. Make another document the default first, then archive this one.");
+    cur.archived = patch.archived || undefined;
+  }
   if (patch.makeDefault) {
+    if (cur.archived) cur.archived = undefined; // the default can't be archived
     // The project-wide engine follows the default document, for older clients.
     if (cur.engine) p.engine = cur.engine;
     p.mainFile = target;
   }
-  if (cur.engine || cur.title) list.push(cur);
+  if (cur.engine || cur.title || cur.archived) list.push(cur);
   p.documents = list.length ? list : undefined;
   p.updatedAt = new Date().toISOString();
   await saveProject(p);
@@ -164,7 +171,7 @@ async function resources(projectId: string, dir: string) {
   return { bibs, macros };
 }
 
-function templateText(template: DocumentTemplate, title: string, r: { bibs: string[]; macros: string[] }) {
+function templateText(template: DocumentTemplate, title: string, r: { bibs: string[]; macros: string[]; intro?: string }) {
   const t = esc(title);
   const macros = r.macros.map((m) => (m.endsWith(".sty") ? `\\usepackage{${m.replace(/\.sty$/, "")}}` : `\\input{${m.replace(/\.tex$/, "")}}`)).join("\n");
   const bib = r.bibs.length ? `\n\\bibliographystyle{plainnat}\n\\bibliography{${r.bibs.join(",")}}\n` : "";
@@ -269,7 +276,7 @@ ${shared}
 One paragraph: the problem, what you did, what you found, and why it matters.
 \\end{abstract}
 
-\\section{Introduction}
+${r.intro ? `\\input{${r.intro}}` : "\\section{Introduction}"}
 ${r.bibs.length ? `\n\\bibliographystyle{IEEEtran}\n\\bibliography{${r.bibs.join(",")}}\n` : ""}
 \\end{document}
 `;
@@ -295,7 +302,7 @@ ${shared}
 \\begin{document}
 \\maketitle
 
-\\section{Introduction}
+${r.intro ? `\\input{${r.intro}}` : "\\section{Introduction}"}
 ${bib}
 \\end{document}
 `;
@@ -304,34 +311,128 @@ ${bib}
 
 const slug = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "document";
 
+const COPY_SKIP = /(^|\/)(_out|reviews|svg-inkscape)(\/|$)/;
+
+async function unusedFolder(projectId: string, base: string) {
+  const taken = new Set((await listFiles(projectId)).map((f) => f.path.split("/")[0]));
+  let name = base, n = 2;
+  while (taken.has(name)) name = `${base}-${n++}`;
+  return name;
+}
+
 /**
- * Create a new document. By default it goes next to the default document, so
- * it can use the same .bib, macros and figures (the sandbox doesn't allow ../).
+ * Create a new document.
+ * - layout "folder" (what people pick in the UI): a self-contained folder of
+ *   its own (main.tex, sections/, figures/, refs.bib), like a separate paper.
+ * - layout "beside" (the default for agents): one .tex next to the default
+ *   document, reusing its .bib, macros and figures (the sandbox can't read ../).
+ * - copyFrom: start from a copy of an existing document's folder, e.g. a
+ *   journal version of a conference paper.
  * `content` (from an agent) replaces the template.
  */
-export async function createDocument(projectId: string, input: { title?: string; template?: string; path?: string; content?: string; engine?: Engine }) {
+export async function createDocument(projectId: string, input: {
+  title?: string; template?: string; path?: string; content?: string; engine?: Engine; layout?: "folder" | "beside"; copyFrom?: string;
+}) {
   const project = await getProject(projectId);
   const template = (DOCUMENT_TEMPLATES.some((t) => t.id === input.template) ? input.template : "article") as DocumentTemplate;
-  const title = (input.title ?? "").trim().slice(0, 120) || DOCUMENT_TEMPLATES.find((t) => t.id === template)!.label;
-  const baseDir = path.posix.dirname(project.mainFile);
-  let target = input.path?.trim().replace(/^\/+/, "");
-  if (!target) target = path.posix.join(baseDir, `${slug(title)}.tex`);
-  if (!target.endsWith(".tex")) target += ".tex";
-  target = path.posix.normalize(target);
-  resolvePath(projectId, target);
-  if ((await textOf(projectId, target)) !== null) {
-    if (input.path) throw new HttpError(409, `${target} already exists`);
-    const stem = target.replace(/\.tex$/, "");
-    let n = 2;
-    while ((await textOf(projectId, `${stem}-${n}.tex`)) !== null) n++;
-    target = `${stem}-${n}.tex`;
+  const title = (input.title ?? "").trim().slice(0, 120) || (input.copyFrom ? `Copy of ${path.posix.basename(path.posix.dirname(input.copyFrom)) || "document"}` : DOCUMENT_TEMPLATES.find((t) => t.id === template)!.label);
+  let target: string;
+
+  if (input.copyFrom || input.layout === "folder") {
+    const folder = await unusedFolder(projectId, input.path?.trim().replace(/^\/+|\/+$/g, "").replace(/\.tex$/, "") || slug(title));
+    resolvePath(projectId, folder);
+    if (input.copyFrom) {
+      // A copy of another document: its whole folder, or (for a document at the top level) just the files it uses.
+      const src = (await resolveDocument(projectId, input.copyFrom)).path;
+      const srcDir = path.posix.dirname(src);
+      const all = await listFiles(projectId);
+      const files = srcDir === "."
+        ? await documentFiles(projectId, src, new Set(all.filter((f) => f.type === "file").map((f) => f.path)))
+        : all.filter((f) => f.type === "file" && f.path.startsWith(`${srcDir}/`) && !COPY_SKIP.test(f.path)).map((f) => f.path);
+      for (const f of files) {
+        const rel = srcDir === "." ? f : f.slice(srcDir.length + 1);
+        const live = isTextPath(f) ? await textOf(projectId, f) : null; // includes edits not saved to disk yet
+        const data = live ?? (await readFile(resolvePath(projectId, f)));
+        await writeBinary(projectId, `${folder}/${rel}`, Buffer.from(data));
+      }
+      for (const d of all.filter((f) => f.type === "dir" && srcDir !== "." && f.path.startsWith(`${srcDir}/`) && !COPY_SKIP.test(f.path))) {
+        await mkdir(resolvePath(projectId, `${folder}/${d.path.slice(srcDir.length + 1)}`), { recursive: true });
+      }
+      target = `${folder}/${path.posix.basename(src)}`;
+      if (input.title?.trim()) await updateDocument(projectId, target, { title: input.title });
+      return target;
+    }
+    // A fresh, self-contained document folder.
+    target = `${folder}/main.tex`;
+    const withSections = template === "article" || template === "ieee";
+    const withBib = template !== "blank";
+    if (withSections) await writeText(projectId, `${folder}/sections/introduction.tex`, "\\section{Introduction}\n\nStart writing here.\n");
+    if (withBib) await writeText(projectId, `${folder}/refs.bib`, "% References for this document. Add entries here, or insert them from the Library with \\cite{.\n");
+    await mkdir(resolvePath(projectId, `${folder}/figures`), { recursive: true });
+    const content = input.content?.trim() ? `${input.content.replace(/\s*$/, "")}\n`
+      : templateText(template, title, { bibs: withBib ? ["refs"] : [], macros: [], intro: withSections ? "sections/introduction" : undefined });
+    await writeText(projectId, target, content);
+  } else {
+    const baseDir = path.posix.dirname(project.mainFile);
+    target = input.path?.trim().replace(/^\/+/, "") || path.posix.join(baseDir, `${slug(title)}.tex`);
+    if (!target.endsWith(".tex")) target += ".tex";
+    target = path.posix.normalize(target);
+    resolvePath(projectId, target);
+    if ((await textOf(projectId, target)) !== null) {
+      if (input.path) throw new HttpError(409, `${target} already exists`);
+      const stem = target.replace(/\.tex$/, "");
+      let n = 2;
+      while ((await textOf(projectId, `${stem}-${n}.tex`)) !== null) n++;
+      target = `${stem}-${n}.tex`;
+    }
+    const dir = path.posix.dirname(target);
+    const content = input.content?.trim() ? `${input.content.replace(/\s*$/, "")}\n` : templateText(template, title, await resources(projectId, dir));
+    if (!documentClassOf(content)) throw new HttpError(400, "A document needs a \\documentclass line");
+    await writeText(projectId, target, content);
   }
-  const dir = path.posix.dirname(target);
-  const content = input.content?.trim() ? `${input.content.replace(/\s*$/, "")}\n` : templateText(template, title, await resources(projectId, dir));
-  if (!documentClassOf(content)) throw new HttpError(400, "A document needs a \\documentclass line");
-  await writeText(projectId, target, content);
   if (input.engine && input.engine !== project.engine) await updateDocument(projectId, target, { engine: input.engine });
   // Letters and other classes without \title: remember the name the person or agent gave it.
-  if (input.title?.trim() && !documentTitleOf(content)) await updateDocument(projectId, target, { title: input.title });
+  const written = (await textOf(projectId, target)) ?? "";
+  if (input.title?.trim() && !documentTitleOf(written)) await updateDocument(projectId, target, { title: input.title });
   return target;
+}
+
+/**
+ * Add a section to a document: sections/<name>.tex in the document's folder,
+ * \\input from the main file (before the bibliography, or \\end{document}),
+ * through the live document so everyone's editor updates.
+ */
+export async function addSection(projectId: string, docPath: string, title: string, session: Session) {
+  const doc = (await resolveDocument(projectId, docPath)).path;
+  const name = title.trim().slice(0, 80);
+  if (!name) throw new HttpError(400, "Give the section a name");
+  const dir = path.posix.dirname(doc);
+  const stem = slug(name);
+  let rel = `sections/${stem}`, n = 2;
+  while ((await textOf(projectId, path.posix.join(dir, `${rel}.tex`))) !== null) rel = `sections/${stem}-${n++}`;
+  const file = path.posix.join(dir, `${rel}.tex`).replace(/^\.\//, "");
+  await writeText(projectId, file, `\\section{${esc(name)}}\n\\label{sec:${stem}}\n\n`);
+  const line = `\\input{${rel}}`;
+  await withDoc(projectId, doc, session, (y) => {
+    const t = y.getText("content");
+    const src = t.toString();
+    // After the last \\input/\\include, else before the bibliography or \\end{document}.
+    // Body sections only: not the references, appendix or acknowledgements, which stay last.
+    const all = [...src.matchAll(/^[ \t]*\\(?:input|include)\{([^}]*)\}[^\n]*$/gm)];
+    const isBack = (m: RegExpMatchArray) => /(ref|bib|appendi|acknowledg|supplement)/i.test(m[1]);
+    const firstBackInput = all.find(isBack)?.index ?? -1;
+    const inputs = all.filter((m) => !isBack(m) && (firstBackInput < 0 || m.index! < firstBackInput));
+    const backMatter = src.search(/^[ \t]*\\(?:appendix(?![a-zA-Z])|bibliographystyle|bibliography|printbibliography|begin\{thebibliography\}|end\{document\})/m);
+    const last = inputs.filter((m) => backMatter < 0 || m.index! < backMatter).at(-1);
+    let at: number;
+    let text: string;
+    if (last) { at = last.index! + last[0].length; text = `\n${line}`; }
+    else {
+      const stop = src.search(/^[ \t]*\\(?:bibliographystyle|bibliography|printbibliography|end\{document\})/m);
+      at = stop >= 0 ? stop : src.length;
+      text = `${line}\n\n`;
+    }
+    t.insert(at, text);
+  });
+  return file;
 }

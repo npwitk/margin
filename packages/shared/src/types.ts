@@ -16,7 +16,13 @@ export interface Project {
   updatedAt: string;
 }
 
-export interface DocumentSettings { path: string; engine?: Engine; title?: string }
+export interface DocumentSettings {
+  path: string;
+  engine?: Engine;
+  title?: string;
+  /** Put away: hidden from the document list and file groups until restored. Files are untouched. */
+  archived?: boolean;
+}
 
 /** A compilable root .tex file in a project: the paper, slides, a cover letter… */
 export interface DocumentInfo {
@@ -30,6 +36,8 @@ export interface DocumentInfo {
   docClass?: string;
   /** The title was set in Margin (Rename group), not taken from \\title. */
   customTitle?: boolean;
+  /** Archived: kept, but out of the way (see DocumentSettings.archived). */
+  archived?: boolean;
   /** Project files this document uses: its \\input/\\include tree, figures, .bib, local .cls/.sty. Includes the root. */
   files?: string[];
 }

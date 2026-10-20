@@ -88,7 +88,7 @@ async function projectContext(projectId: string) {
   const [project, files, docs] = await Promise.all([getProject(projectId), listFiles(projectId), listDocuments(projectId)]);
   const roots = new Set(docs.map((d) => d.path));
   const list = files.filter((f) => f.type === "file").map((f) => `${f.path}${f.path === project.mainFile ? "  [default document]" : roots.has(f.path) ? "  [document]" : ""}`).join("\n");
-  const documents = docs.map((d) => `- ${d.path}: "${d.title}" (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}`).join("\n");
+  const documents = docs.map((d) => `- ${d.path}: "${d.title}" (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}${d.archived ? " [archived: out of date, leave it alone unless asked]" : ""}`).join("\n");
   return `<project>\nTitle: ${project.name}\nDefault document: ${project.mainFile}${project.goal ? `\nPublishing goal: ${project.goal}` : ""}\nDocuments:\n${documents}\nFiles:\n${list}\n</project>`;
 }
 

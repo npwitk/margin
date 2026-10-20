@@ -1180,3 +1180,17 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
 .card-meta .ellipsis { flex: 1; min-width: 0; }
 .card-time { flex-shrink: 0; }
 @media (max-width: 600px) { .project-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; } .card-stage { height: 160px; } }
+.newdoc-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); margin: 14px 0 6px; }
+.newdoc-seg { margin-left: 0; margin-bottom: 4px; }
+.newdoc-where { grid-template-columns: 1fr 1fr; margin-top: 0; }
+/* Archived documents */
+.tree-archived-toggle, .doc-archived-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; height: 28px; padding: 0 6px; margin-top: 6px; border-radius: 5px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-faint); text-align: left;
+}
+.tree-archived-toggle:hover, .doc-archived-toggle:hover { color: var(--text-muted); background: var(--hover); }
+.doc-archived-toggle { border-top: 1px solid var(--border); border-radius: 0; margin-top: 4px; }
+.tree-group.archived .tree-group-head { color: var(--text-faint); }
+.tree-group.archived .tree-row { opacity: 0.7; }
+.doc-item.archived .doc-pick { cursor: default; opacity: 0.85; }
+.doc-item.archived .doc-pick:hover { background: transparent; }

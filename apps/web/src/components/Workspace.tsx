@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isTextPath, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions } from "@margin/shared";
-import { DocumentSwitcher, NewDocumentDialog } from "./DocumentSwitcher.tsx";
+import { DocumentSwitcher, NewDocumentDialog, type NewDocumentInput } from "./DocumentSwitcher.tsx";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
 import { useThreads } from "../lib/review.ts";
@@ -210,7 +210,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         setActiveDocState(start);
         const last = load<string | null>(`open:${projectId}`, null);
         const startView = load<"write" | "board" | "review">(`view:${projectId}`, "write");
-        openFile(last && f.some((x) => x.path === last) ? last : p.mainFile);
+        openFile(last && f.some((x) => x.path === last && x.type === "file") ? last : p.mainFile);
         setView(startView);
         compile();
       })
@@ -234,10 +234,11 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   // A teammate deleted or renamed the file you had open.
   useEffect(() => {
-    if (!project || !files.length || !textPath || files.some((f) => f.path === textPath)) return;
-    collab?.close(textPath);
-    editor.current?.forget(textPath);
-    notify(`${textPath} was moved or deleted`);
+    // The open file (text or not) must still exist as a file; a folder with its old name doesn't count.
+    const current = textPath ?? openPath;
+    if (!project || !files.length || !current || files.some((f) => f.path === current && f.type === "file")) return;
+    if (textPath) { collab?.close(textPath); editor.current?.forget(textPath); }
+    notify(`${current} was moved or deleted`);
     openFile(files.some((f) => f.path === project.mainFile) ? project.mainFile : files.find((f) => f.path.endsWith(".tex"))?.path ?? project.mainFile);
   }, [files]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -370,6 +371,27 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           setDocs(r.documents);
           break;
         }
+        case "newSection": {
+          const name = await ask({ title: "New section", label: `Adds sections/<name>.tex to ${path} and \\input's it at the end of the document.`, placeholder: "e.g. Threat model", confirm: "Add section" });
+          if (!name) return;
+          const r = await api.addSection(projectId, path, name);
+          setDocs(r.documents);
+          await refreshFiles();
+          openFile(r.path);
+          break;
+        }
+        case "newDocument":
+          setNewDocOpen(true);
+          break;
+        case "archiveDoc":
+        case "restoreDoc": {
+          const archived = action === "archiveDoc";
+          const r = await api.updateDocument(projectId, { path, archived });
+          setDocs(r.documents);
+          if (archived && activeRef.current === path) selectDoc(r.project.mainFile);
+          notify(archived ? `Archived ${path}. Its files are kept; restore it any time from Archived at the bottom of the file list.` : `Restored ${path}`);
+          break;
+        }
         case "resetDocName": {
           const r = await api.updateDocument(projectId, { path, title: "" });
           setDocs(r.documents);
@@ -455,7 +477,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     if (!resultsRef.current[doc]) compile();
   }
 
-  const createDoc = async (input: { title: string; template: string; path?: string }) => {
+  const createDoc = async (input: NewDocumentInput) => {
     const r = await api.createDocument(projectId, input);
     setDocs(r.documents);
     await refreshFiles();
@@ -561,7 +583,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         <DocumentSwitcher docs={docs.length ? docs : [{ path: project.mainFile, title: project.name, engine: project.engine, isDefault: true, hasPdf: false }]}
           active={currentDoc} onSelect={selectDoc} onCreate={() => setNewDocOpen(true)} openSignal={docMenuSignal}
           onSetEngine={(path, engine) => void setEngine(engine, path).catch((e) => notify(e.message))}
-          onMakeDefault={(path) => void onTreeAction("setMain", path)} />
+          onMakeDefault={(path) => void onTreeAction("setMain", path)}
+          onRestore={(path) => void onTreeAction("restoreDoc", path)} />
         <div className="segmented">
           <button className={view === "write" ? "active" : ""} onClick={() => setView("write")}>Write</button>
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")} title={`Board (${MOD}⇧B)`}>Board</button>
@@ -747,7 +770,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         onOpenFile={(p) => { setHistoryOpen(false); openFile(p); }}
         onRestored={(msg) => { notify(msg); void refreshFiles(); void refreshDocs(); compile(); }} />}
       {aiSettingsOpen && <AiSettingsDialog settings={aiSettings} onChange={setAiSettings} onClose={() => setAiSettingsOpen(false)} />}
-      {newDocOpen && <NewDocumentDialog defaultDir={(project.mainFile.includes("/") ? project.mainFile.slice(0, project.mainFile.lastIndexOf("/")) : ".")} onCreate={createDoc} onClose={() => setNewDocOpen(false)} />}
+      {newDocOpen && <NewDocumentDialog docs={docs} defaultDir={(project.mainFile.includes("/") ? project.mainFile.slice(0, project.mainFile.lastIndexOf("/")) : ".")} onCreate={createDoc} onClose={() => setNewDocOpen(false)} />}
       {shareOpen && <ShareDialog projectId={projectId} session={session} onClose={() => setShareOpen(false)} />}
       {localOpen && <LocalDialog projectId={projectId} session={session} onClose={() => setLocalOpen(false)} />}
       {prompt && <PromptDialog req={prompt} onDone={() => setPrompt(null)} />}

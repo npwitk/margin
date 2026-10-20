@@ -83,3 +83,31 @@ test("documentFiles follows inputs, figures, bib and local classes", async () =>
     "paper/mycls.cls", "paper/refs.bib", "paper/sections/detail.tex", "paper/sections/intro.tex",
   ]);
 });
+
+test("documents in their own folders, copies, new sections and archiving", async () => {
+  const p = await storage.createProject("Folders", "article", "Tester");
+  const session = { name: "Tester" };
+  // A fresh, self-contained document folder.
+  const journal = await docs.createDocument(p.id, { title: "Journal version", template: "article", layout: "folder" });
+  assert.equal(journal, "journal-version/main.tex");
+  const main = (await storage.readText(p.id, journal)).content;
+  assert.match(main, /\\input\{sections\/introduction\}/);
+  assert.match(main, /\\bibliography\{refs\}/);
+  for (const f of ["journal-version/sections/introduction.tex", "journal-version/refs.bib"]) assert.ok((await storage.readText(p.id, f)).content);
+  // A copy of it: whole folder, unique name.
+  const copy = await docs.createDocument(p.id, { title: "Journal v2", copyFrom: journal });
+  assert.equal(copy, "journal-v2/main.tex");
+  assert.ok((await storage.readText(p.id, "journal-v2/sections/introduction.tex")).content);
+  assert.equal((await docs.resolveDocument(p.id, copy)).path, copy);
+  const again = await docs.createDocument(p.id, { title: "Journal v2", copyFrom: journal });
+  assert.equal(again, "journal-v2-2/main.tex");
+  // Archive a document, and the default can't be archived.
+  await docs.updateDocument(p.id, again, { archived: true });
+  const list = await docs.listDocuments(p.id);
+  assert.equal(list.find((d) => d.path === again)?.archived, true);
+  assert.equal(list.find((d) => d.path === copy)?.archived, false);
+  await assert.rejects(docs.updateDocument(p.id, "main.tex", { archived: true }), /default document/);
+  await docs.updateDocument(p.id, again, { archived: false });
+  assert.equal((await docs.listDocuments(p.id)).find((d) => d.path === again)?.archived, false);
+  void session;
+});

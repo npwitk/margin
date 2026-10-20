@@ -234,6 +234,7 @@ function ProjectCard({ project }: { project: Project }) {
     let cancelled = false;
     api.documents(project.id).then((d) => {
       if (cancelled) return;
+      d = d.filter((x) => !x.archived);
       setDocs(d);
       for (const doc of d.slice(0, 3)) {
         if (!doc.hasPdf) { setThumbs((t) => ({ ...t, [doc.path]: null })); continue; }
