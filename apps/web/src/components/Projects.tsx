@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
-import type { Project, Session } from "@margin/shared";
+import { useEffect, useRef, useState } from "react";
+import type { DocumentInfo, Project, Session } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Modal } from "./Dialog.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
 import { WorkspaceDialog } from "./WorkspaceDialog.tsx";
+import { load, save } from "../lib/storage.ts";
+import { pageThumbnail } from "../lib/thumbnails.ts";
 
 const TEMPLATES = [
   { id: "article", label: "Article", hint: "Sections, natbib, a references folder" },
@@ -19,6 +21,8 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
   const [creating, setCreating] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [admin, setAdmin] = useState(false);
+  const [layout, setLayoutState] = useState<"grid" | "list">(() => load("projectsLayout", "grid"));
+  const setLayout = (l: "grid" | "list") => { setLayoutState(l); save("projectsLayout", l); };
   useEffect(() => { api.workspace().then((w) => setAdmin(w.admin)).catch(() => {}); }, []);
 
   useEffect(() => { api.projects().then(setProjects).catch((e) => setError(e.message)); }, []);
@@ -49,6 +53,12 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
         <div className="row">
           <h2>Projects</h2>
           <div className="spacer" />
+          {!!projects?.length && (
+            <div className="segmented layout-toggle">
+              <button className={layout === "grid" ? "active" : ""} onClick={() => setLayout("grid")} title="Cards with previews">Grid</button>
+              <button className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} title="Compact list">List</button>
+            </div>
+          )}
           <button className="btn primary" onClick={() => setCreating(true)}><Icon name="plus" size={14} />New paper <kbd>N</kbd></button>
         </div>
         {error && <p className="error">{error}</p>}
@@ -61,16 +71,22 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
             <button className="btn primary" onClick={() => setCreating(true)}>New paper</button>
           </div>
         )}
-        <div className="project-list">
-          {projects?.map((p) => (
-            <button key={p.id} className="project-row" onClick={() => navigate({ name: "project", id: p.id })}>
-              <Icon name="file" size={15} className="muted" />
-              <span className="grow">{p.name}</span>
-              <span className="muted small">{p.mainFile}</span>
-              <span className="muted small fixed">{relativeTime(p.updatedAt)}</span>
-            </button>
-          ))}
-        </div>
+        {layout === "grid" ? (
+          <div className="project-grid">
+            {projects?.map((p) => <ProjectCard key={p.id} project={p} />)}
+          </div>
+        ) : (
+          <div className="project-list">
+            {projects?.map((p) => (
+              <button key={p.id} className="project-row" onClick={() => navigate({ name: "project", id: p.id })}>
+                <Icon name="file" size={15} className="muted" />
+                <span className="grow">{p.name}</span>
+                <span className="muted small">{p.mainFile}</span>
+                <span className="muted small fixed">{relativeTime(p.updatedAt)}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </main>
       {creating && <NewProject onClose={() => setCreating(false)} />}
       {membersOpen && <WorkspaceDialog session={session} onClose={() => setMembersOpen(false)} />}
@@ -191,5 +207,71 @@ function TemplatePicker({ value, onChange }: { value: string; onChange(v: string
         </label>
       ))}
     </div>
+  );
+}
+
+/**
+ * A project as a card: the first page of its default document, with its other
+ * documents (slides, letters…) fanned out behind it.
+ */
+function ProjectCard({ project }: { project: Project }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [docs, setDocs] = useState<DocumentInfo[] | null>(null);
+  const [thumbs, setThumbs] = useState<Record<string, string | null>>({});
+
+  // Only load previews for cards on screen.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); } }, { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    api.documents(project.id).then((d) => {
+      if (cancelled) return;
+      setDocs(d);
+      for (const doc of d.slice(0, 3)) {
+        if (!doc.hasPdf) { setThumbs((t) => ({ ...t, [doc.path]: null })); continue; }
+        const prefix = `${project.id}:${doc.path}:`;
+        void pageThumbnail(api.pdfUrl(project.id, 1, doc.path), `${prefix}${project.updatedAt}`, prefix).then((url) => {
+          if (!cancelled) setThumbs((t) => ({ ...t, [doc.path]: url }));
+        });
+      }
+    }).catch(() => setDocs([]));
+    return () => { cancelled = true; };
+  }, [visible, project.id, project.updatedAt]);
+
+  const shown = (docs ?? []).slice(0, 3);
+  const others = (docs?.length ?? 1) - 1;
+  return (
+    <button ref={ref} className="project-card" onClick={() => navigate({ name: "project", id: project.id })}>
+      <div className={`card-stage n-${Math.max(1, shown.length)}`}>
+        {(shown.length ? shown : [null]).map((d, i) => {
+          const src = d ? thumbs[d.path] : undefined;
+          const landscape = d?.docClass === "beamer";
+          return (
+            <div key={d?.path ?? "empty"} className={`page-thumb pos-${i} ${landscape ? "landscape" : ""}`} style={{ zIndex: 3 - i }} title={d ? `${d.title} (${d.path})` : undefined}>
+              {src ? <img src={src} alt="" draggable={false} />
+                : <div className={`page-blank ${src === null || !d ? "" : "loading"}`}>
+                    <span /><span /><span /><span /><span />
+                    {i === 0 && (src === null || (docs && !docs.length)) && <em>Not compiled yet</em>}
+                  </div>}
+            </div>
+          );
+        })}
+      </div>
+      <div className="card-info">
+        <div className="card-name">{project.name}</div>
+        <div className="muted small card-meta">
+          <span className="ellipsis">{project.mainFile}{others > 0 ? ` · +${others} document${others > 1 ? "s" : ""}` : ""}</span>
+          <span className="card-time">{relativeTime(project.updatedAt)}</span>
+        </div>
+      </div>
+    </button>
   );
 }
