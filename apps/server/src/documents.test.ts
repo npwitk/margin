@@ -56,3 +56,30 @@ test("several documents in one project", async () => {
   assert.equal(made, "letters/rebuttal.tex");
   await assert.rejects(docs.createDocument(p.id, { title: "x", path: "letters/rebuttal.tex", content: "\\documentclass{article}" }), /already exists/);
 });
+
+test("documentFiles follows inputs, figures, bib and local classes", async () => {
+  const p = await storage.createProject("Deps", "blank", "Tester");
+  const dir = storage.projectDir(p.id);
+  const put = async (rel: string, text: string) => { await mkdir(path.dirname(path.join(dir, rel)), { recursive: true }); await writeFile(path.join(dir, rel), text); };
+  await put("paper/main.tex", [
+    "\\documentclass{mycls}", "\\usepackage{macros}", "\\graphicspath{{figures/}}", "\\begin{document}",
+    "\\input{sections/intro}", "% \\input{sections/old}", "\\includegraphics[width=3cm]{arch}", "\\includesvg{flow}",
+    "\\bibliography{refs,extra}", "\\end{document}",
+  ].join("\n"));
+  await put("paper/mycls.cls", "");
+  await put("paper/macros.sty", "");
+  await put("paper/sections/intro.tex", "\\input{sections/detail}\n\\lstinputlisting{code/run.py}");
+  await put("paper/sections/detail.tex", "x");
+  await put("paper/sections/old.tex", "x");
+  await put("paper/figures/arch.pdf", "x");
+  await put("paper/figures/flow.svg", "<svg/>");
+  await put("paper/refs.bib", "");
+  await put("paper/code/run.py", "");
+  await put("paper/notes.md", "");
+  const all = new Set((await storage.listFiles(p.id)).filter((f) => f.type === "file").map((f) => f.path));
+  const deps = (await docs.documentFiles(p.id, "paper/main.tex", all)).sort();
+  assert.deepEqual(deps, [
+    "paper/code/run.py", "paper/figures/arch.pdf", "paper/figures/flow.svg", "paper/macros.sty", "paper/main.tex",
+    "paper/mycls.cls", "paper/refs.bib", "paper/sections/detail.tex", "paper/sections/intro.tex",
+  ]);
+});

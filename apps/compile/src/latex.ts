@@ -64,7 +64,8 @@ export async function compile(workDir: string, mainFile: string, engine: Engine)
   const log = texLog ? `${texLog}\n\n——— latexmk ———\n${res.output}` : res.output;
   const diagnostics: Diagnostic[] = parseLatexLog(texLog, cwd)
     // Margin converted the SVGs already; the svg package's "no shell escape, no Inkscape" notes are noise.
-    .filter((d) => !(/^\[svg\]|shell escape/i.test(d.message) && /svg|inkscape/i.test(d.message) && d.severity !== "error"))
+    // Shell escape is always off in the sandbox, so "shell escape disabled" notes are noise.
+    .filter((d) => d.severity === "error" || !(/^\[shellesc\] Shell escape disabled/i.test(d.message) || (/^\[svg\]|shell escape/i.test(d.message) && /svg|inkscape/i.test(d.message))))
     .map((d) => ({ ...d, file: d.file ? projectPath(d.file, dir, mainFile) ?? d.file : undefined }));
   if (res.timedOut) diagnostics.unshift({ severity: "error", message: `Compile timed out after ${TIMEOUT_MS / 1000}s` });
   for (const f of svgs.failed) diagnostics.unshift({ severity: "error", file: projectPath(f, dir, mainFile), message: `Couldn't convert ${f} for \\includesvg. Check it's a valid SVG, or export it as PDF and use \\includegraphics.` });

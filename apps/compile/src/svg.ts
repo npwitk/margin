@@ -1,4 +1,4 @@
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { run } from "./run.ts";
 
@@ -26,24 +26,56 @@ async function findSvgs(dir: string, out: string[] = [], depth = 0): Promise<str
 }
 
 /**
- * The .pdf_tex wrapper the svg package \input's. Inkscape's version places the
- * PDF in a picture sized by \svgwidth / \svgscale; this does the same with
- * \includegraphics, so no page size is needed.
+ * The figure's size in bp, from the root <svg>'s width/height (or viewBox),
+ * the same way librsvg sizes it: unitless and px are CSS pixels (96 dpi).
  */
-function pdfTex(pdfName: string) {
+export function svgSize(svg: string): [number, number] | null {
+  const root = /<svg\b[^>]*>/i.exec(svg)?.[0];
+  if (!root) return null;
+  const attr = (n: string) => new RegExp(`\\s${n}\\s*=\\s*["']([^"']*)["']`, "i").exec(root)?.[1]?.trim();
+  const vb = attr("viewBox")?.split(/[\s,]+/).map(Number);
+  const toBp = (v: string | undefined, fallback?: number): number | null => {
+    const m = v && /^([\d.]+(?:e[-+]?\d+)?)\s*(px|pt|pc|mm|cm|in|%)?$/i.exec(v);
+    if (!m) return v ? fallback ?? null : null;
+    const n = Number(m[1]);
+    switch ((m[2] ?? "px").toLowerCase()) {
+      case "pt": return n;
+      case "pc": return n * 12;
+      case "mm": return (n / 25.4) * 72;
+      case "cm": return (n / 2.54) * 72;
+      case "in": return n * 72;
+      case "%": return fallback !== undefined ? (fallback * n) / 100 : null;
+      default: return n * 0.75;
+    }
+  };
+  const vbW = vb?.length === 4 && vb[2] > 0 ? vb[2] * 0.75 : undefined;
+  const vbH = vb?.length === 4 && vb[3] > 0 ? vb[3] * 0.75 : undefined;
+  // Percentages are relative to the viewBox; a missing side follows the viewBox's aspect ratio.
+  let w = toBp(attr("width"), vbW ?? undefined), h = toBp(attr("height"), vbH ?? undefined);
+  if (!attr("width") && !attr("height")) { w = vbW ?? null; h = vbH ?? null; }
+  else if (!attr("height") && w && vbW && vbH) h = (w * vbH) / vbW;
+  else if (!attr("width") && h && vbW && vbH) w = (h * vbW) / vbH;
+  return w && h && w > 0 && h > 0 ? [w, h] : null;
+}
+
+/**
+ * The .pdf_tex wrapper the svg package \input's, shaped like Inkscape's: a
+ * picture of width 1 and the figure's aspect ratio. The package patches
+ * \picture and \includegraphics while reading it to apply width/height/scale.
+ */
+function pdfTex(pdfName: string, widthBp: number, heightBp: number) {
   return `%% Created by Margin (librsvg) for the svg package, in place of Inkscape.
 \\begingroup%
   \\ifx\\svgwidth\\undefined%
-    \\ifx\\svgscale\\undefined%
-      \\includegraphics{${pdfName}}%
-    \\else%
-      \\includegraphics[scale=\\svgscale]{${pdfName}}%
-    \\fi%
+    \\setlength{\\unitlength}{${widthBp.toFixed(4)}bp}%
   \\else%
-    \\includegraphics[width=\\svgwidth]{${pdfName}}%
+    \\setlength{\\unitlength}{\\svgwidth}%
   \\fi%
   \\global\\let\\svgwidth\\undefined%
   \\global\\let\\svgscale\\undefined%
+  \\begin{picture}(1,${(heightBp / widthBp).toFixed(8)})%
+    \\put(0,0){\\includegraphics[width=\\unitlength,page=1]{${pdfName}}}%
+  \\end{picture}%
 \\endgroup%
 `;
 }
@@ -66,8 +98,9 @@ export async function prepareSvgs(cwd: string): Promise<SvgResult> {
     if (out && wrapper && out.mtimeMs >= src.mtimeMs) continue;
     const res = await run("rsvg-convert", ["--format=pdf", `--output=${pdf}`, svg], { cwd, timeoutMs: 20_000 }).catch((err: Error) => ({ code: -1, output: err.message, timedOut: false }));
     const made = res.code === 0 && (await stat(pdf).then((st) => st.size > 0, () => false));
-    if (!made) { result.failed.push(path.relative(cwd, svg)); continue; }
-    await writeFile(tex, pdfTex(pdfName));
+    const size = made ? svgSize(await readFile(svg, "utf8").catch(() => "")) : null;
+    if (!made || !size) { result.failed.push(path.relative(cwd, svg)); continue; }
+    await writeFile(tex, pdfTex(pdfName, size[0], size[1]));
     result.converted++;
   }
   return result;

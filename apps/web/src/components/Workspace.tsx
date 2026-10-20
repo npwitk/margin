@@ -282,6 +282,24 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     }
   };
 
+  /** Move or rename a file or folder, keeping open editors, the default document and the active document in step. */
+  const moveTo = async (path: string, to: string) => {
+    if (files.some((f) => f.path === to)) { notify(`${to} already exists`); return; }
+    await collab?.flush();
+    await api.move(projectId, path, to);
+    collab?.closeUnder(path);
+    files.filter((f) => f.path === path || f.path.startsWith(`${path}/`)).forEach((f) => editor.current?.forget(f.path));
+    const moved = (p: string | null) => (p && (p === path || p.startsWith(`${path}/`)) ? to + p.slice(path.length) : p);
+    if (project && moved(project.mainFile) !== project.mainFile) setProject(await api.updateProject(projectId, { mainFile: moved(project.mainFile)! }));
+    if (activeRef.current && moved(activeRef.current) !== activeRef.current) selectDoc(moved(activeRef.current)!);
+    setOpenPath(moved);
+    setTextPath(moved);
+    await Promise.all([refreshFiles(), refreshDocs()]);
+    // LaTeX paths don't follow the file: tell them which documents still point at the old place.
+    const users = docs.filter((d) => d.path !== path && d.files?.some((f) => f === path || f.startsWith(`${path}/`)));
+    if (users.length) notify(`Moved to ${to}. ${users.map((d) => d.path).join(", ")} still refer${users.length === 1 ? "s" : ""} to ${path}; update the \\input/\\includegraphics path.`);
+  };
+
   const onTreeAction = async (action: TreeAction, path: string) => {
     try {
       switch (action) {
@@ -308,15 +326,18 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         case "rename": {
           const to = await ask({ title: "Rename", label: "You can move it by changing the folder.", initial: path, confirm: "Rename" });
           if (!to || to === path) return;
+          await moveTo(path, to);
+          break;
+        }
+        case "download": {
+          // A plain link download: files come as-is, folders (and the project) as .zip.
           await collab?.flush();
-          await api.move(projectId, path, to);
-          collab?.closeUnder(path);
-          files.filter((f) => f.path === path || f.path.startsWith(`${path}/`)).forEach((f) => editor.current?.forget(f.path));
-          const moved = (p: string | null) => (p && (p === path || p.startsWith(`${path}/`)) ? to + p.slice(path.length) : p);
-          if (project && moved(project.mainFile) !== project.mainFile) setProject(await api.updateProject(projectId, { mainFile: moved(project.mainFile)! }));
-          setOpenPath(moved);
-          setTextPath(moved);
-          await refreshFiles();
+          const a = document.createElement("a");
+          a.href = api.downloadUrl(projectId, path);
+          a.download = "";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
           break;
         }
         case "delete": {
@@ -579,7 +600,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               files={files}
               openPath={openPath}
               mainFile={project.mainFile}
-              documents={docs.map((d) => d.path)}
+              documents={docs}
+              onMove={(from, dir) => void moveTo(from, `${dir ? `${dir}/` : ""}${from.split("/").pop()}`).catch((e) => notify((e as Error).message))}
               activeDoc={currentDoc}
               dirty={dirty}
               peersByFile={peersByFile}

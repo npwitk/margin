@@ -5,7 +5,7 @@ import {
   type DocumentInfo, type DocumentSettings, type DocumentTemplate, type Engine, type Project,
 } from "@margin/shared";
 import { textFiles, textOf } from "./ai/paper.ts";
-import { HttpError, getProject, resolvePath, saveProject, workDir, writeText } from "./storage.ts";
+import { HttpError, getProject, listFiles, resolvePath, saveProject, workDir, writeText } from "./storage.ts";
 
 /**
  * A project can hold several LaTeX documents: the paper, slides, a cover
@@ -23,8 +23,65 @@ export const pdfPathOf = (id: string, doc: string) =>
 
 const settingsOf = (p: Project, doc: string): DocumentSettings | undefined => p.documents?.find((d) => d.path === doc);
 
+const GRAPHIC_EXTS = ["", ".pdf", ".png", ".jpg", ".jpeg", ".eps", ".svg", ".gif"];
+
+/** Remove LaTeX comments (an unescaped % to the end of the line). */
+const stripComments = (tex: string) => tex.replace(/(^|[^\\])%.*$/gm, "$1");
+
+/**
+ * Every project file a document uses: the \input/\include tree, figures
+ * (honouring \graphicspath and \svgpath), .bib files, local classes, styles and
+ * bibliography styles, and listings. Paths resolve the way TeX does: from the
+ * document's folder first, then from the including file's folder.
+ */
+export async function documentFiles(projectId: string, doc: string, all: Set<string>): Promise<string[]> {
+  const mainDir = path.posix.dirname(doc);
+  const found = new Set<string>([doc]);
+  const queue = [doc];
+  const graphicDirs = new Set<string>([""]);
+  const norm = (p: string) => path.posix.normalize(p).replace(/^\.\//, "");
+  const resolve = (from: string, name: string, exts: string[]) => {
+    const n = name.trim().replace(/^"|"$/g, "");
+    if (!n || n.startsWith("/") || /[{}\\#]/.test(n)) return null;
+    for (const base of [mainDir, path.posix.dirname(from), "."]) {
+      for (const ext of exts) {
+        const cand = norm(path.posix.join(base, n + (n.toLowerCase().endsWith(ext) ? "" : ext)));
+        if (!cand.startsWith("..") && all.has(cand)) return cand;
+      }
+    }
+    return null;
+  };
+  const add = (p: string | null) => {
+    if (!p || found.has(p)) return;
+    found.add(p);
+    if (p.endsWith(".tex")) queue.push(p);
+  };
+  for (let guard = 0; queue.length && guard < 500; guard++) {
+    const file = queue.shift()!;
+    const tex = stripComments((await textOf(projectId, file)) ?? "");
+    for (const m of tex.matchAll(/\\(?:graphicspath|svgpath)\s*\{((?:\{[^{}]*\}\s*)+)\}/g)) {
+      for (const d of m[1].matchAll(/\{([^{}]*)\}/g)) graphicDirs.add(d[1].replace(/\/+$/, "") ? `${d[1].replace(/\/+$/, "")}/` : "");
+    }
+    const cmd = (names: string, body = "[^}]+") => new RegExp(`\\\\(?:${names})\\*?\\s*(?:\\[[^\\]]*\\]\\s*)*\\{(${body})\\}`, "g");
+    for (const m of tex.matchAll(cmd("input|include|subfile|InputIfFileExists|includeonly"))) add(resolve(file, m[1], [".tex", ""]));
+    for (const m of tex.matchAll(cmd("includegraphics|includesvg|includepdf|includestandalone"))) {
+      const exts = /\\includesvg/.test(m[0]) ? [".svg"] : GRAPHIC_EXTS;
+      for (const dir of graphicDirs) { const hit = resolve(file, dir + m[1], exts); if (hit) { add(hit); break; } }
+    }
+    for (const m of tex.matchAll(cmd("bibliography|addbibresource|addglobalbib"))) for (const b of m[1].split(",")) add(resolve(file, b, [".bib"]));
+    for (const m of tex.matchAll(cmd("usepackage|RequirePackage"))) for (const p of m[1].split(",")) add(resolve(file, p, [".sty"]));
+    for (const m of tex.matchAll(cmd("documentclass|LoadClass"))) add(resolve(file, m[1], [".cls"]));
+    for (const m of tex.matchAll(cmd("bibliographystyle"))) add(resolve(file, m[1], [".bst"]));
+    for (const m of tex.matchAll(cmd("lstinputlisting|verbatiminput|VerbatimInput"))) add(resolve(file, m[1], [""]));
+    for (const m of tex.matchAll(/\\inputminted\s*(?:\[[^\]]*\]\s*)?\{[^}]*\}\s*\{([^}]+)\}/g)) add(resolve(file, m[1], [""]));
+  }
+  return [...found];
+}
+
 export async function listDocuments(projectId: string): Promise<DocumentInfo[]> {
   const project = await getProject(projectId);
+  const everything = await listFiles(projectId);
+  const all = new Set(everything.filter((f) => f.type === "file").map((f) => f.path));
   const files = (await textFiles(projectId)).filter((f) => f.path.endsWith(".tex") && !SKIP.test(f.path));
   const docs: DocumentInfo[] = [];
   for (const f of files) {
@@ -39,6 +96,7 @@ export async function listDocuments(projectId: string): Promise<DocumentInfo[]> 
       isDefault: f.path === project.mainFile,
       hasPdf: await stat(pdfPathOf(projectId, f.path)).then(() => true, () => false),
       docClass: cls ?? undefined,
+      files: await documentFiles(projectId, f.path, all),
     });
   }
   // Default first, then by folder and name.

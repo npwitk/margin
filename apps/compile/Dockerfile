@@ -13,6 +13,8 @@ COPY apps/compile apps/compile
 FROM ${TEXLIVE_IMAGE}
 COPY --from=build /usr/local/bin/node /usr/local/bin/node
 COPY --from=build /app /app
+# librsvg converts SVGs for \includesvg (the svg package would otherwise need Inkscape and shell escape).
+RUN apt-get update && apt-get install -y --no-install-recommends librsvg2-bin && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 10001 tex
 USER tex
 WORKDIR /app/apps/compile

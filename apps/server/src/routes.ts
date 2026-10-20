@@ -4,6 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { zipSync } from "fflate";
 import {
   acceptSuggestion, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf,
   type CompileResult, type Engine, type ThreadKind, type ThreadStatus,
@@ -129,6 +130,32 @@ export const projectRoutes = new Hono<AppEnv>()
     if (baseEtag && (await currentText(id, rel)).etag !== baseEtag) throw new HttpError(409, "File changed since you read it");
     await writeThroughCollab(id, rel, content, c.get("session"));
     return c.json({ etag: etagOf(content) });
+  })
+
+  // Download a file as-is, or a folder (or the whole project, with no path) as a .zip. Live edits are saved first.
+  .get("/:id/download", limit("download", 60, 600), async (c) => {
+    const id = c.req.param("id");
+    const rel = (c.req.query("path") ?? "").replace(/^\/+|\/+$/g, "");
+    await flushProject(id);
+    const attachment = (name: string) => `attachment; filename="${name.replace(/[^\w.-]+/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+    if (rel) {
+      const abs = resolvePath(id, rel);
+      const st = await stat(abs).catch(() => null);
+      if (!st) throw new HttpError(404, "Not found");
+      if (st.isFile()) {
+        return new Response(Readable.toWeb(createReadStream(abs)) as ReadableStream, {
+          headers: { "content-type": "application/octet-stream", "content-length": String(st.size), "content-disposition": attachment(path.basename(rel)) },
+        });
+      }
+    }
+    const files = (await listFiles(id)).filter((f) => f.type === "file" && (!rel || f.path.startsWith(`${rel}/`)));
+    const total = files.reduce((n, f) => n + f.size, 0);
+    if (total > 200 * 1024 * 1024) throw new HttpError(413, "That's over 200 MB; clone it with git instead (Local → git clone)");
+    const entries: Record<string, Uint8Array> = {};
+    const base = rel ? path.posix.basename(rel) : (await getProject(id)).name;
+    for (const f of files) entries[`${base}/${rel ? f.path.slice(rel.length + 1) : f.path}`] = new Uint8Array(await readFile(resolvePath(id, f.path)));
+    const zip = zipSync(entries, { level: 6 });
+    return new Response(zip, { headers: { "content-type": "application/zip", "content-length": String(zip.length), "content-disposition": attachment(`${base}.zip`) } });
   })
 
   .get("/:id/raw", async (c) => {

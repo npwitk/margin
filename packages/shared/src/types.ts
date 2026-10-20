@@ -28,6 +28,8 @@ export interface DocumentInfo {
   hasPdf: boolean;
   /** e.g. "beamer", "article". */
   docClass?: string;
+  /** Project files this document uses: its \\input/\\include tree, figures, .bib, local .cls/.sty. Includes the root. */
+  files?: string[];
 }
 
 export const DOCUMENT_TEMPLATES = [

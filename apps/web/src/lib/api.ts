@@ -61,6 +61,8 @@ export const api = {
     return req<{ saved: string[] }>(`${P(id)}/upload`, { method: "POST", body: form });
   },
   rawUrl: (id: string, path: string) => `/api${P(id)}/raw?path=${q(path)}`,
+  /** A file as-is, or a folder (or the whole project, with no path) as a .zip. */
+  downloadUrl: (id: string, path = "") => `/api${P(id)}/download${path ? `?path=${q(path)}` : ""}`,
 
   compile: (id: string, doc?: string) => req<CompileResult & { doc: string }>(`${P(id)}/compile`, json("POST", { doc })),
   pdfUrl: (id: string, version: number, doc?: string) => `/api${P(id)}/output.pdf?v=${version}${doc ? `&doc=${q(doc)}` : ""}`,
