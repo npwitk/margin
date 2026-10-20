@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { documentLabels, isTextPath, type DocumentInfo, type FileEntry } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
 import { load, save } from "../lib/storage.ts";
@@ -22,6 +22,8 @@ interface Props {
   onOpen(path: string): void;
   onAction(action: TreeAction, path: string): void;
   onDropFiles(dir: string, files: File[]): void;
+  /** Scroll to and highlight this path, opening the groups and folders it's in. */
+  reveal?: { path: string; key: number };
   /** Drag a file or folder in the tree onto a folder ("" = project root). */
   onMove(from: string, toDir: string): void;
 }
@@ -99,7 +101,7 @@ function groupByDocument(files: FileEntry[], allDocs: DocumentInfo[]): Group[] {
   return [...groups, shared, other, ...archived].filter((g) => g.files.length || g.archived);
 }
 
-export function FileTree({ projectId, files, openPath, mainFile, documents = [], activeDoc, dirty, peersByFile, onOpen, onAction, onDropFiles, onMove }: Props) {
+export function FileTree({ projectId, files, openPath, mainFile, documents = [], activeDoc, dirty, peersByFile, onOpen, onAction, onDropFiles, onMove, reveal }: Props) {
   const docPaths = useMemo(() => documents.map((d) => d.path), [documents]);
   const [mode, setMode] = useState<"documents" | "folders">(() => load(`treeMode:${projectId}`, "documents"));
   const grouped = mode === "documents" && documents.length > 1;
@@ -126,6 +128,29 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
     setCollapsed(next);
     save(`collapsed:${projectId}`, [...next]);
   };
+  // Reveal a path: open every group and folder on the way, then scroll to it and flash it.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!reveal) return;
+    const target = reveal.path;
+    const ancestors = target.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+    const next = new Set(collapsed);
+    const scopes = grouped ? groups.filter((g) => g.files.some((f) => f.path === target || f.path.startsWith(`${target}/`))).map((g) => g.id) : [""];
+    for (const scope of scopes) {
+      const g = groups.find((x) => x.id === scope);
+      if (g) { next.delete(`group:${g.id}`); if (g.archived) { next.add(`open:group:${g.id}`); setShowArchived(true); } }
+      for (const a of ancestors) next.delete(scope ? `${scope}|${a}` : a);
+    }
+    setCollapsed(next);
+    const t = window.setTimeout(() => {
+      const el = rootRef.current?.querySelector<HTMLElement>(`[data-path="${CSS.escape(target)}"]`);
+      el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      el?.classList.add("flash");
+      window.setTimeout(() => el?.classList.remove("flash"), 1600);
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [reveal]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const setTreeMode = (m: "documents" | "folders") => { setMode(m); save(`treeMode:${projectId}`, m); };
 
   const openMenu = (e: MouseEvent, node: Node | null) => {
@@ -184,7 +209,7 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
         const open = !collapsed.has(key);
         return (
           <div key={n.path} {...dropProps(n.path)} className={dropTarget === n.path ? "drop-target" : undefined}>
-            <button className={`tree-row ${dragging === n.path ? "is-dragging" : ""}`} style={pad} onClick={() => toggle(key)} onContextMenu={(e) => openMenu(e, n)} {...dragProps(n.path)}>
+            <button data-path={n.path} className={`tree-row ${dragging === n.path ? "is-dragging" : ""}`} style={pad} onClick={() => toggle(key)} onContextMenu={(e) => openMenu(e, n)} {...dragProps(n.path)}>
               <Icon name="chevron" size={12} className={`chev ${open ? "open" : ""}`} />
               <Icon name="folder" size={14} className="tree-icon" />
               <span className="tree-name">{n.name}</span>
@@ -197,6 +222,7 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
       return (
         <button
           key={n.path}
+          data-path={n.path}
           className={`tree-row ${openPath === n.path ? "selected" : ""} ${dragging === n.path ? "is-dragging" : ""}`}
           style={pad}
           onClick={() => onOpen(n.path)}
@@ -222,7 +248,7 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
   const act = (a: TreeAction, path: string) => { setMenu(null); onAction(a, path); };
 
   return (
-    <div className={`tree ${dropTarget === "" ? "drop-target" : ""}`} onContextMenu={(e) => openMenu(e, null)} {...dropProps("")}>
+    <div ref={rootRef} className={`tree ${dropTarget === "" ? "drop-target" : ""}`} onContextMenu={(e) => openMenu(e, null)} {...dropProps("")}>
       {documents.length > 1 && (
         <div className="tree-mode segmented">
           <button className={grouped ? "active" : ""} onClick={() => setTreeMode("documents")} title="Group files by the document that uses them">By document</button>

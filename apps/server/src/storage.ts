@@ -167,14 +167,20 @@ export async function writeBinary(id: string, rel: string, data: Buffer) {
   await writeFile(abs, data);
 }
 
-export async function createEntry(id: string, rel: string, type: "file" | "dir") {
+/** Create an empty file or a folder. Returns { existed: true } when that folder is already there. */
+export async function createEntry(id: string, rel: string, type: "file" | "dir"): Promise<{ existed: boolean }> {
   const abs = resolvePath(id, rel);
-  if (await stat(abs).catch(() => null)) throw new HttpError(409, "Already exists");
+  const st = await stat(abs).catch(() => null);
+  if (st?.isDirectory() && type === "dir") return { existed: true };
+  if (st?.isDirectory()) throw new HttpError(409, `There's already a folder called ${rel}. Pick another name for the file.`);
+  if (st && type === "dir") throw new HttpError(409, `There's already a file called ${rel}. Rename or delete it first, then create the folder.`);
+  if (st) throw new HttpError(409, `${rel} already exists`);
   if (type === "dir") await mkdir(abs, { recursive: true });
   else {
     await mkdir(path.dirname(abs), { recursive: true });
     await writeFile(abs, "");
   }
+  return { existed: false };
 }
 
 export async function moveEntry(id: string, from: string, to: string) {

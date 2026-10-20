@@ -178,7 +178,8 @@ export const projectRoutes = new Hono<AppEnv>()
 
   .post("/:id/entries", async (c) => {
     const { path: rel, type } = await c.req.json<{ path: string; type: "file" | "dir" }>();
-    await createEntry(c.req.param("id"), rel, type === "dir" ? "dir" : "file");
+    const { existed } = await createEntry(c.req.param("id"), rel, type === "dir" ? "dir" : "file");
+    if (existed) return c.json({ ok: true, existed: true });
     recordEdit(c.req.param("id"), rel, editorName(c.get("session")));
     emit(c.req.param("id"), "filesVersion", Date.now());
     return c.json({ ok: true }, 201);

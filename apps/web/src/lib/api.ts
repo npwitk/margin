@@ -52,7 +52,7 @@ export const api = {
   readFile: (id: string, path: string) => req<{ content: string; etag: string }>(`${P(id)}/file?path=${q(path)}`),
   writeFile: (id: string, path: string, content: string, baseEtag?: string) =>
     req<{ etag: string }>(`${P(id)}/file?path=${q(path)}`, json("PUT", { content, baseEtag })),
-  createEntry: (id: string, path: string, type: "file" | "dir") => req(`${P(id)}/entries`, json("POST", { path, type })),
+  createEntry: (id: string, path: string, type: "file" | "dir") => req<{ ok: true; existed?: boolean }>(`${P(id)}/entries`, json("POST", { path, type })),
   move: (id: string, from: string, to: string) => req(`${P(id)}/move`, json("POST", { from, to })),
   remove: (id: string, path: string) => req(`${P(id)}/entries?path=${q(path)}`, { method: "DELETE" }),
   upload: (id: string, dir: string, files: File[]) => {

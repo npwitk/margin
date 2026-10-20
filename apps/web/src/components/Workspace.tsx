@@ -63,6 +63,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyKey, setHistoryKey] = useState(0);
+  const [revealPath, setRevealPath] = useState<{ path: string; key: number }>();
   const [localOpen, setLocalOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   // Markdown files open rendered; this remembers which ones you switched to the source.
@@ -318,8 +319,11 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         case "newFolder": {
           const name = await ask({ title: "New folder", placeholder: "figures", confirm: "Create" });
           if (!name) return;
-          await api.createEntry(projectId, join(path, name), "dir");
+          const folder = join(path, name);
+          const r = await api.createEntry(projectId, folder, "dir");
           await refreshFiles();
+          setRevealPath({ path: folder, key: Date.now() });
+          if (r.existed) notify(`${folder} already exists, so here it is`);
           break;
         }
         case "upload":
@@ -639,6 +643,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               openPath={openPath}
               mainFile={project.mainFile}
               documents={docs}
+              reveal={revealPath}
               onMove={(from, dir) => void moveTo(from, `${dir ? `${dir}/` : ""}${from.split("/").pop()}`).catch((e) => notify((e as Error).message))}
               activeDoc={currentDoc}
               dirty={dirty}
