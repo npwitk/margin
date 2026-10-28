@@ -11,6 +11,7 @@ import {
 } from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
 import { compileProject, compileWorker } from "./compile.ts";
+import { documentOutline } from "./ai/paper.ts";
 import { addSection, createDocument, listDocuments, pdfPathOf, renameDocuments, resolveDocument, updateDocument } from "./documents.ts";
 import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
 import { changesIn, withGitLock } from "./git.ts";
@@ -238,6 +239,11 @@ export const projectRoutes = new Hono<AppEnv>()
 
   // ── Documents: every .tex with a \documentclass ─────────────────────────
   .get("/:id/documents", async (c) => c.json(await listDocuments(c.req.param("id"))))
+  .get("/:id/outline", async (c) => {
+    const id = c.req.param("id");
+    const { path: doc } = await resolveDocument(id, c.req.query("doc"));
+    return c.json({ doc, entries: await documentOutline(id, doc) });
+  })
   .post("/:id/documents", limit("create", 30, 3600), async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json<{ title?: string; template?: string; path?: string; engine?: Engine; layout?: "folder" | "beside"; copyFrom?: string }>();

@@ -36,7 +36,7 @@ export function Problems({ result, onOpen, onFix, onClose }: Props) {
               <span className="problem-msg">{d.message}</span>
               {d.file && <span className="problem-loc">{d.file}{d.line ? `:${d.line}` : ""}</span>}
               {onFix && d.severity === "error" && (
-                <button className="btn ghost tight fix-btn" onClick={(e) => { e.stopPropagation(); onFix(d); }} title="Ask Claude to fix this">✦ Fix</button>
+                <button className="btn ghost tight fix-btn" onClick={(e) => { e.stopPropagation(); onFix(d); }} title="Ask Claude to fix this"><Icon name="sparkle" size={12} />Fix</button>
               )}
             </div>
           ))}

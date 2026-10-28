@@ -111,3 +111,20 @@ test("documents in their own folders, copies, new sections and archiving", async
   assert.equal((await docs.listDocuments(p.id)).find((d) => d.path === again)?.archived, false);
   void session;
 });
+
+test("outline follows \\input from a document in a subfolder", async () => {
+  const p = await storage.createProject("Outline", "blank", "Tester");
+  const dir = storage.projectDir(p.id);
+  await mkdir(path.join(dir, "paper", "sections"), { recursive: true });
+  await writeFile(path.join(dir, "paper", "main.tex"), "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\n\\input{sections/method}\n% \\input{sections/old}\n\\appendix\n\\section{Proofs}\n\\end{document}\n");
+  await writeFile(path.join(dir, "paper", "sections", "method.tex"), "\\section{Method}\n\n\\subsection{Setup}\n");
+  await writeFile(path.join(dir, "paper", "sections", "old.tex"), "\\section{Old}\n");
+  const { documentOutline } = await import("./ai/paper.ts");
+  const entries = await documentOutline(p.id, "paper/main.tex");
+  assert.deepEqual(entries.map((e) => [e.number, e.title, e.file, e.line]), [
+    ["1", "Intro", "paper/main.tex", 3],
+    ["2", "Method", "paper/sections/method.tex", 1],
+    ["2.1", "Setup", "paper/sections/method.tex", 3],
+    ["A", "Proofs", "paper/main.tex", 7],
+  ]);
+});

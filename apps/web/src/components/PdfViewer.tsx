@@ -34,6 +34,22 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
   const liveScale = useRef(1);
   const settle = useRef(0);
   const hovering = useRef(false);
+  const [page, setPage] = useState(1);
+
+  // The page in the middle of the view, for the "2 of 9" counter.
+  useEffect(() => {
+    const scroll = scroller.current;
+    if (!scroll) return;
+    const onScroll = () => {
+      const mid = scroll.getBoundingClientRect().top + scroll.clientHeight / 2;
+      for (const el of scroll.querySelectorAll<HTMLElement>(".pdf-page")) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom >= mid) { setPage(Number(el.dataset.page)); return; }
+      }
+    };
+    scroll.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroll.removeEventListener("scroll", onScroll);
+  }, []);
 
   // Load (or reload) the document. Keep showing the old one until the new one is ready.
   useEffect(() => {
@@ -239,14 +255,13 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
 
   return (
     <div className="pdf">
-      <div className="pdf-toolbar">
-        <span className="muted">{doc ? `${doc.numPages} page${doc.numPages === 1 ? "" : "s"}` : ""}</span>
-        <div className="spacer" />
-        <button className="icon-btn" onClick={() => step(-1)} title="Zoom out" disabled={!doc}><Icon name="minus" size={14} /></button>
-        <button className={`chip ${zoom === "fit" ? "active" : ""}`} onClick={() => setZoom("fit")} disabled={!doc}>
+      <div className="pdf-toolbar" hidden={!doc}>
+        <button className="icon-btn" onClick={() => step(-1)} title="Zoom out"><Icon name="minus" size={14} /></button>
+        <button className={`pdf-zoom ${zoom === "fit" ? "active" : ""}`} onClick={() => setZoom("fit")} title="Fit to width">
           {zoom === "fit" ? "Fit" : `${Math.round(scale * 100)}%`}
         </button>
-        <button className="icon-btn" onClick={() => step(1)} title="Zoom in" disabled={!doc}><Icon name="plus" size={14} /></button>
+        <button className="icon-btn" onClick={() => step(1)} title="Zoom in"><Icon name="plus" size={14} /></button>
+        {doc && <span className="pdf-page-count">{page} of {doc.numPages}</span>}
         {url && <a className="icon-btn" href={url} download title="Download PDF"><Icon name="download" size={14} /></a>}
       </div>
       <div className="pdf-scroll" ref={scroller} onClick={onClick}

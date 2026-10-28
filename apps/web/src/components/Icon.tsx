@@ -33,12 +33,22 @@ const PATHS: Record<string, string> = {
   paperclip: "M20 11.5l-8.2 8.2a5 5 0 0 1-7-7L13 4.5a3.3 3.3 0 0 1 4.7 4.7l-8.2 8.2a1.7 1.7 0 0 1-2.4-2.4L14.5 7.6",
   tag: "M3 12V4h8l10 10-8 8zM7.5 8h.01",
   external: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
+  sidebar: "M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM9.5 4v16M6.5 8h1M6.5 11h1",
+  outline: "M4 6h.01M8 6h12M8 12h.01M12 12h8M8 18h.01M12 18h8",
+  share: "M12 3v12M8 7l4-4 4 4M7 11H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1",
+  search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+  sparkle: "M12 3c.5 4.5 2.5 6.5 7 7-4.5.5-6.5 2.5-7 7-.5-4.5-2.5-6.5-7-7 4.5-.5 6.5-2.5 7-7zM19 16.5c.2 1.4.8 2 2.2 2.2-1.4.2-2 .8-2.2 2.3-.2-1.5-.8-2.1-2.2-2.3 1.4-.2 2-.8 2.2-2.2z",
+  ellipsis: "M6 12h.01M12 12h.01M18 12h.01",
+  sync: "M4 12h10M10 8l4 4-4 4M18 5v14",
+  grid: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+  list: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01",
+  people: "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20a6.5 6.5 0 0 1 13 0M16 4.3a3.5 3.5 0 0 1 0 6.4M18 14.2a6.5 6.5 0 0 1 3.5 5.8",
 };
 
 export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {
   return (
     <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={PATHS[name] ?? PATHS.file} />
     </svg>
   );
@@ -46,4 +56,22 @@ export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS 
 
 export function Spinner({ size = 14 }: { size?: number }) {
   return <span className="spinner" style={{ width: size, height: size }} aria-label="Loading" />;
+}
+
+/** Margin's mark: a page with a margin rule and lines of text, in a rounded square. */
+export function AppMark({ size = 22 }: { size?: number }) {
+  return (
+    <svg className="app-mark" width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
+      <defs>
+        <linearGradient id="mk-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#3b8cff" />
+          <stop offset="1" stopColor="#0a5fe0" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="15" fill="url(#mk-bg)" />
+      <rect x="15" y="11" width="34" height="42" rx="4" fill="#fff" />
+      <path d="M23 11v42" stroke="#ff6b5b" strokeWidth="2" />
+      <path d="M28 20h15M28 26h15M28 32h11M28 38h15M28 44h8" stroke="#c7d3e6" strokeWidth="2.6" strokeLinecap="round" />
+    </svg>
+  );
 }

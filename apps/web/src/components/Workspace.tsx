@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isTextPath, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions } from "@margin/shared";
+import { isTextPath, type OutlineEntry, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions } from "@margin/shared";
 import { DocumentSwitcher, NewDocumentDialog, type NewDocumentInput } from "./DocumentSwitcher.tsx";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
@@ -22,6 +22,7 @@ import { Editor, type EditorHandle } from "./Editor.tsx";
 import { FileTree, type TreeAction } from "./FileTree.tsx";
 import { HistoryPanel } from "./HistoryPanel.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
+import { Outline, currentEntry } from "./Outline.tsx";
 import { PdfViewer } from "./PdfViewer.tsx";
 import { Problems } from "./Problems.tsx";
 import { Board } from "./Board.tsx";
@@ -73,6 +74,13 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [toast, setToast] = useState<string | null>(null);
   const [split, setSplit] = useState(() => load("split", 0.5));
   const [sidebar, setSidebar] = useState(() => load("sidebar", true));
+  const [sideTab, setSideTabState] = useState<"files" | "outline">(() => load("sideTab", "files"));
+  const setSideTab = (t: "files" | "outline") => { setSideTabState(t); save("sideTab", t); };
+  const [outline, setOutline] = useState<{ doc: string; entries: OutlineEntry[] } | null>(null);
+  const [outlineLoading, setOutlineLoading] = useState(false);
+  const [outlineTick, setOutlineTick] = useState(0);
+  const [currentHeading, setCurrentHeading] = useState(-1);
+  const cursor = useRef<{ file: string | null; line: number | null }>({ file: null, line: null });
   const [view, setView] = useState<"write" | "board" | "review">(() => load(`view:${projectId}`, "write"));
   const [previewTab, setPreviewTab] = useState<"pdf" | "assistant" | "citations">(() => load("previewTab", "pdf"));
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
@@ -162,7 +170,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     const events = collab.events;
     const onEvent = (e: { keysChanged: Set<string>; transaction: { local: boolean } }) => {
       if (e.transaction.local) return;
-      if (e.keysChanged.has("filesVersion")) { void refreshFiles(); void refreshDocs(); }
+      if (e.keysChanged.has("filesVersion")) { void refreshFiles(); void refreshDocs(); setOutlineTick((n) => n + 1); }
       if (e.keysChanged.has("historyVersion")) setHistoryKey((k) => k + 1);
       const last = events.get("lastCompile") as { by: string; ok: boolean; doc?: string } | undefined;
       if (e.keysChanged.has("lastCompile") && last && last.by !== session.name) {
@@ -266,6 +274,12 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       if (k === "k") { e.preventDefault(); setPaletteOpen((o) => !o); }
       else if (k === "d" && e.shiftKey) { e.preventDefault(); setDocMenuSignal((n) => n + 1); }
       else if (k === "s" || k === "enter") { e.preventDefault(); compile(); }
+      else if (k === "o" && e.shiftKey) {
+        e.preventDefault();
+        setView("write");
+        setSidebar(true);
+        setSideTabState((t) => { const next = t === "outline" ? "files" : "outline"; save("sideTab", next); return next; });
+      }
       else if (k === "b" && e.shiftKey) { e.preventDefault(); setView((v) => (v === "board" ? "write" : "board")); }
       else if (k === "b") { e.preventDefault(); setSidebar((s: boolean) => { save("sidebar", !s); return !s; }); }
     };
@@ -408,14 +422,47 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   };
 
   // ── SyncTeX ──────────────────────────────────────────────────────────────
-  const forwardSync = async (path: string, line: number) => {
+  const forwardSync = async (path: string, line: number, quiet = false) => {
     try {
       const res = await api.forward(projectId, path, line, activeRef.current ?? undefined);
       if (res) setHighlight({ ...res, key: Date.now() });
-      else notify("That line isn't in the PDF yet — compile first");
+      else if (!quiet) notify("That line isn't in the PDF yet — compile first");
     } catch (err) {
-      notify((err as Error).message);
+      if (!quiet) notify((err as Error).message);
     }
+  };
+
+  // ── Outline (table of contents) ──────────────────────────────────────────
+  const outlineDoc = activeDoc && (docs.length === 0 || docs.some((d) => d.path === activeDoc)) ? activeDoc : project?.mainFile ?? null;
+  const outlineWanted = (sidebar && sideTab === "outline" && view === "write") || paletteOpen;
+  useEffect(() => {
+    if (!outlineWanted || !outlineDoc) return;
+    let cancelled = false;
+    setOutlineLoading(true);
+    // Wait for typing to pause (and edits to reach the server) before re-reading.
+    const t = setTimeout(() => {
+      api.outline(projectId, outlineDoc)
+        .then((r) => { if (!cancelled) setOutline(r); })
+        .catch(() => { if (!cancelled) setOutline({ doc: outlineDoc, entries: [] }); })
+        .finally(() => { if (!cancelled) setOutlineLoading(false); });
+    }, outline?.doc === outlineDoc ? 700 : 0);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, outlineDoc, outlineWanted, outlineTick, dirty.size === 0]);
+
+  const outlineEntries = outline?.doc === outlineDoc ? outline.entries : null;
+  const outlineRef = useRef<OutlineEntry[] | null>(null);
+  outlineRef.current = outlineEntries;
+  const updateHeading = useCallback(() => {
+    setCurrentHeading(currentEntry(outlineRef.current ?? [], cursor.current.file, cursor.current.line));
+  }, []);
+  useEffect(updateHeading, [outlineEntries, updateHeading]);
+
+  const goToHeading = (e: OutlineEntry) => {
+    openFile(e.file, e.line);
+    cursor.current = { file: e.file, line: e.line };
+    updateHeading();
+    void forwardSync(e.file, e.line, true);
   };
 
   const inverseSync = async (page: number, x: number, y: number) => {
@@ -533,7 +580,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       { id: "suggest", label: "Suggest an edit to selection", section: "Review", icon: "comment", run: () => startComment("suggestion") },
       { id: "review", label: reviewOpen ? "Hide review panel" : "Show review panel", section: "View", icon: "comment", run: () => setReviewOpen((o: boolean) => !o) },
       { id: "problems", label: showProblems ? "Hide problems" : "Show problems", section: "View", icon: "alert", run: () => setShowProblems((s) => !s) },
-      { id: "sidebar", label: "Toggle sidebar", section: "View", icon: "folder", hint: `${MOD}B`, run: () => setSidebar((s: boolean) => !s) },
+      { id: "sidebar", label: "Toggle sidebar", section: "View", icon: "sidebar", hint: `${MOD}B`, run: () => setSidebar((s: boolean) => !s) },
+      { id: "outline", label: "Show table of contents", section: "View", icon: "outline", hint: `${MOD}⇧O`, run: () => { setView("write"); setSidebar(true); setSideTab("outline"); } },
       { id: "newfile", label: "New file…", section: "Action", icon: "plus", run: () => void onTreeAction("newFile", "") },
       { id: "upload", label: "Upload files…", section: "Action", icon: "upload", run: () => void onTreeAction("upload", "") },
       { id: "share", label: "Share: members and invite links…", section: "Project", icon: "plus", run: () => setShareOpen(true) },
@@ -552,12 +600,15 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     for (const e of ENGINES) {
       if (e.id !== activeEngine) cmds.push({ id: `engine-${e.id}`, label: `Compile ${activeDoc ?? "this document"} with ${e.label}`, section: "Document", icon: "terminal", run: () => void setEngine(e.id) });
     }
+    for (const e of outlineEntries ?? []) {
+      cmds.push({ id: `heading:${e.file}:${e.line}`, label: `${e.number ? `${e.number}  ` : ""}${e.title}`, section: "Outline", icon: "outline", run: () => goToHeading(e) });
+    }
     for (const f of files) {
       if (f.type === "file") cmds.push({ id: `file:${f.path}`, label: f.path, section: "File", icon: "file", run: () => openFile(f.path) });
     }
     return cmds;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, textPath, project, showProblems, view, reviewOpen, docs, activeDoc]);
+  }, [files, textPath, project, showProblems, view, reviewOpen, docs, activeDoc, outlineEntries]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   if (loadError) {
@@ -582,36 +633,44 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   return (
     <div className="workspace">
       <header className="topbar">
-        <button className="icon-btn" onClick={() => navigate({ name: "projects" })} title="All projects"><Icon name="back" /></button>
-        <button className="project-name" onClick={renameProject} title="Rename project">{project.name}</button>
-        <DocumentSwitcher docs={docs.length ? docs : [{ path: project.mainFile, title: project.name, engine: project.engine, isDefault: true, hasPdf: false }]}
-          active={currentDoc} onSelect={selectDoc} onCreate={() => setNewDocOpen(true)} openSignal={docMenuSignal}
-          onSetEngine={(path, engine) => void setEngine(engine, path).catch((e) => notify(e.message))}
-          onMakeDefault={(path) => void onTreeAction("setMain", path)}
-          onRestore={(path) => void onTreeAction("restoreDoc", path)} />
-        <div className="segmented">
+        <div className="toolbar-leading">
+          <button className="icon-btn" onClick={() => navigate({ name: "projects" })} title="All projects"><Icon name="back" /></button>
+          {view === "write" && (
+            <button className={`icon-btn ${sidebar ? "" : "off"}`} onClick={() => setSidebar((s: boolean) => { save("sidebar", !s); return !s; })} title={`${sidebar ? "Hide" : "Show"} sidebar (${MOD}B)`}><Icon name="sidebar" /></button>
+          )}
+          <button className="project-name" onClick={renameProject} title="Rename project">{project.name}</button>
+          <DocumentSwitcher docs={docs.length ? docs : [{ path: project.mainFile, title: project.name, engine: project.engine, isDefault: true, hasPdf: false }]}
+            active={currentDoc} onSelect={selectDoc} onCreate={() => setNewDocOpen(true)} openSignal={docMenuSignal}
+            onSetEngine={(path, engine) => void setEngine(engine, path).catch((e) => notify(e.message))}
+            onMakeDefault={(path) => void onTreeAction("setMain", path)}
+            onRestore={(path) => void onTreeAction("restoreDoc", path)} />
+        </div>
+        <div className="segmented toolbar-center">
           <button className={view === "write" ? "active" : ""} onClick={() => setView("write")}>Write</button>
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")} title={`Board (${MOD}⇧B)`}>Board</button>
           <button className={view === "review" ? "active" : ""} onClick={() => setView("review")} title="AI review">Review</button>
         </div>
-        <div className="spacer" />
-        <PresenceStrip peers={[...peers, ...agentPeers]} onFollow={follow} />
-        {result && (
-          <button className={`chip ${errors ? "danger" : warnings ? "warn" : ""}`} onClick={() => setShowProblems((s) => !s)} title="Problems">
-            {errors ? <><Icon name="alert" size={13} />{errors} error{errors > 1 ? "s" : ""}</> :
-              warnings ? <><Icon name="alert" size={13} />{warnings} warning{warnings > 1 ? "s" : ""}</> :
-                <><Icon name="check" size={13} />Clean</>}
+        <div className="toolbar-trailing">
+          <PresenceStrip peers={[...peers, ...agentPeers]} onFollow={follow} />
+          {result && (
+            <button className={`status-pill ${errors ? "danger" : warnings ? "warn" : "ok"}`} onClick={() => setShowProblems((s) => !s)} title="Problems and log">
+              {errors ? <><Icon name="alert" size={13} />{errors} error{errors > 1 ? "s" : ""}</> :
+                warnings ? <><Icon name="alert" size={13} />{warnings} warning{warnings > 1 ? "s" : ""}</> :
+                  <><Icon name="check" size={13} />No issues</>}
+            </button>
+          )}
+          <div className="tool-group">
+            <button className="icon-btn" onClick={() => setPaletteOpen(true)} title={`Search and commands (${MOD}K)`}><Icon name="search" /></button>
+            <button className="icon-btn" onClick={() => setHistoryOpen(true)} title="Version history"><Icon name="history" /></button>
+            <button className="icon-btn" onClick={() => setLocalOpen(true)} title="Work locally: git clone, Claude Code, Codex"><Icon name="terminal" /></button>
+            <button className="icon-btn" onClick={() => setShareOpen(true)} title="Share: members and invite links"><Icon name="share" /></button>
+          </div>
+          <button className="btn primary compile-btn" onClick={compile} disabled={compiling} title={`Compile (${MOD}S)`}>
+            {compiling ? <Spinner /> : <Icon name="play" size={12} />}
+            {compiling ? "Compiling" : "Compile"}
           </button>
-        )}
-        <button className="btn ghost" onClick={() => setShareOpen(true)} title="Members and invite links"><Icon name="plus" size={14} />Share</button>
-        <button className="btn ghost" onClick={() => setLocalOpen(true)} title="Clone with git / work with agents"><Icon name="terminal" size={14} />Local</button>
-        <button className="btn ghost" onClick={() => setHistoryOpen(true)} title="Version history: what changed, who changed it, restore"><Icon name="history" size={14} />History</button>
-        <button className="btn ghost" onClick={() => setPaletteOpen(true)} title="Command palette"><kbd>{MOD}K</kbd></button>
-        <button className="btn primary" onClick={compile} disabled={compiling} title={`Compile (${MOD}S)`}>
-          {compiling ? <Spinner /> : <Icon name="play" size={13} />}
-          {compiling ? "Compiling" : "Compile"}
-        </button>
-        <Avatar name={session.name} src={session.avatar} title={`Signed in as ${session.name}${session.github ? ` (@${session.github})` : ""}`} />
+          <Avatar name={session.name} src={session.avatar} title={`Signed in as ${session.name}${session.github ? ` (@${session.github})` : ""}`} />
+        </div>
       </header>
 
       {view === "board" && (
@@ -622,7 +681,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           onOpen={(p, line) => openFile(p, line)} notify={notify} />
       )}
       {planning && (
-        <div className="planning-banner"><Spinner /> ✦ Claude is planning your paper: research question, outline, related work and tasks. This takes about a minute.</div>
+        <div className="planning-banner"><Spinner /> Claude is planning your paper: research question, outline, related work and tasks. This takes about a minute.</div>
       )}
       {project.setup?.status === "error" && (
         <div className="planning-banner error-banner">Planning didn't finish: {project.setup.error} The template is ready to use; you can also ask the Assistant to plan the outline.</div>
@@ -631,12 +690,23 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         {sidebar && (
           <aside className="sidebar">
             <div className="sidebar-head">
-              <span className="section-label">Files</span>
-              <div className="spacer" />
-              <button className="icon-btn" title="New file" onClick={() => void onTreeAction("newFile", "")}><Icon name="plus" size={14} /></button>
-              <button className="icon-btn" title="New folder" onClick={() => void onTreeAction("newFolder", "")}><Icon name="folderPlus" size={14} /></button>
-              <button className="icon-btn" title="Upload" onClick={() => void onTreeAction("upload", "")}><Icon name="upload" size={14} /></button>
+              <div className="segmented side-tabs">
+                <button className={sideTab === "files" ? "active" : ""} onClick={() => setSideTab("files")}>Files</button>
+                <button className={sideTab === "outline" ? "active" : ""} onClick={() => setSideTab("outline")} title={`Table of contents (${MOD}⇧O)`}>Outline</button>
+              </div>
+              {sideTab === "files" && (
+                <div className="side-actions">
+                  <button className="icon-btn" title="New file" onClick={() => void onTreeAction("newFile", "")}><Icon name="plus" size={15} /></button>
+                  <button className="icon-btn" title="New folder" onClick={() => void onTreeAction("newFolder", "")}><Icon name="folderPlus" size={15} /></button>
+                  <button className="icon-btn" title="Upload files (or drop them anywhere in the list)" onClick={() => void onTreeAction("upload", "")}><Icon name="upload" size={15} /></button>
+                </div>
+              )}
             </div>
+            {sideTab === "outline" && (
+              <Outline entries={outlineEntries} loading={outlineLoading} current={currentHeading} onPick={goToHeading}
+                docTitle={docs.find((d) => d.path === currentDoc)?.title ?? currentDoc} />
+            )}
+            {sideTab === "files" && (
             <FileTree
               projectId={projectId}
               files={files}
@@ -652,16 +722,19 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               onAction={(a, p) => void onTreeAction(a, p)}
               onDropFiles={(dir, list) => void uploadTo(dir, list)}
             />
+            )}
           </aside>
         )}
 
         <div className="panes">
           <section className="pane" ref={center} style={{ flexBasis: `${split * 100}%` }}>
             <div className={`pane-tab ${reviewOpen && !binaryOpen ? "with-review" : ""}`}>
-              <Icon name={binaryOpen ? (binaryOpen.endsWith(".pdf") ? "pdf" : "image") : "file"} size={13} className="muted" />
-              <span>{openPath}</span>
-              {openPath && dirty.has(openPath) && <span className="dot" title="Sending edits…" />}
-              {openPath && peersByFile.get(openPath)?.map((p) => <Avatar key={p.clientId} name={p.user.name} size="xs" title={`${p.user.name} is here${p.line ? ` (line ${p.line})` : ""}`} />)}
+              <Icon name={binaryOpen ? (binaryOpen.endsWith(".pdf") ? "pdf" : "image") : "file"} size={13} className="crumb-icon" />
+              <span className="crumbs ellipsis">
+                {openPath?.split("/").map((part, i, all) => (
+                  <span key={i} className={i === all.length - 1 ? "crumb-file" : "crumb-dir"}>{part}{i < all.length - 1 && <Icon name="chevron" size={9} className="crumb-sep" />}</span>
+                ))}
+              </span>
               <div className="spacer" />
               {textPath && /\.(md|markdown)$/i.test(textPath) && !binaryOpen && (
                 <div className="segmented small-seg">
@@ -670,13 +743,16 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                 </div>
               )}
               {!binaryOpen && !mdPreview && textPath && textPath !== currentDoc && docs.some((d) => d.path === textPath)
-                ? <button className="chip doc-hint" onClick={() => selectDoc(textPath)} title="This file is its own document"><Icon name="play" size={11} />Compile & preview this document</button>
-                : !binaryOpen && !mdPreview && /\.tex$/i.test(textPath ?? "") && <span className="muted small hint">{MOD}J jump to PDF · {MOD}-click PDF to jump back</span>}
+                ? <button className="chip doc-hint" onClick={() => selectDoc(textPath)} title="This file is its own document"><Icon name="play" size={11} />Preview this document</button>
+                : !binaryOpen && !mdPreview && /\.tex$/i.test(textPath ?? "") && (
+                  <button className="icon-btn" onClick={() => textPath && void forwardSync(textPath, (cursor.current.file === textPath && cursor.current.line) || 1)}
+                    title={`Show this line in the PDF (${MOD}J). ${MOD}-click the PDF to jump back.`}><Icon name="sync" size={15} /></button>
+                )}
               {!binaryOpen && (
                 <>
-                  <button className="btn ghost tight" onClick={() => startComment()} title={`Comment on selection (${MOD}⌥M)`}><Icon name="comment" size={13} />Comment</button>
-                  <button className={`chip ${reviewOpen ? "active" : ""}`} onClick={() => setReviewOpen((o: boolean) => !o)} title="Review panel">
-                    Review{openThreads ? ` ${openThreads}` : ""}
+                  <button className="icon-btn" onClick={() => startComment()} title={`Comment on selection (${MOD}⌥M)`}><Icon name="comment" size={15} /></button>
+                  <button className={`icon-btn review-toggle ${reviewOpen ? "on" : ""}`} onClick={() => setReviewOpen((o: boolean) => !o)} title={`${reviewOpen ? "Hide" : "Show"} comments and suggestions`}>
+                    <Icon name="lines" size={15} />{!!openThreads && <span className="badge-count">{openThreads}</span>}
                   </button>
                 </>
               )}
@@ -691,7 +767,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     collab={collab}
                     path={textPath}
                     revealAt={revealAt}
-                    onCursor={(line) => collab.setPresence({ line })}
+                    onCursor={(line) => { collab.setPresence({ line }); cursor.current = { file: textPath, line }; updateHeading(); }}
                     onComment={() => startComment()}
                     onThreadClick={(id) => { setReviewOpen(true); setActiveThread(id); }}
                     onCompile={compile}
@@ -733,9 +809,11 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
           <section className="pane preview" style={{ flexBasis: `${(1 - split) * 100}%` }}>
             <div className="preview-tabs">
+              <div className="segmented">
               <button className={previewTab === "pdf" ? "active" : ""} onClick={() => setPreviewTab("pdf")}>PDF</button>
-              <button className={previewTab === "assistant" ? "active" : ""} onClick={() => setPreviewTab("assistant")}>✦ Assistant{[...agentsMap.values()].some((x) => (x.agent ?? "Claude") === "Claude") ? <span className="live-dot" /> : null}</button>
+              <button className={previewTab === "assistant" ? "active" : ""} onClick={() => setPreviewTab("assistant")}><Icon name="sparkle" size={12} />Assistant{[...agentsMap.values()].some((x) => (x.agent ?? "Claude") === "Claude") ? <span className="live-dot" /> : null}</button>
               <button className={previewTab === "citations" ? "active" : ""} onClick={() => setPreviewTab("citations")}>Citations</button>
+              </div>
             </div>
             <div className="preview-body" hidden={previewTab !== "pdf"}>
               <PdfViewer

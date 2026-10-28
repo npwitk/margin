@@ -251,9 +251,9 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
           <div key={n.path} {...dropProps(n.path)} className={dropTarget === n.path ? "drop-target" : undefined}>
             <button data-path={n.path} className={`tree-row ${dragging === n.path ? "is-dragging" : ""}`} style={pad} onClick={() => toggle(key)} onContextMenu={(e) => openMenu(e, n)} {...dragProps(n.path)}>
               <Icon name="chevron" size={12} className={`chev ${open ? "open" : ""}`} />
-              <Icon name="folder" size={14} className="tree-icon" />
+              <Icon name="folder" size={15} className="tree-icon folder" />
               <span className="tree-name">{n.name}</span>
-              {!n.children.length && <span className="muted small">empty</span>}
+              {!n.children.length && <span className="tree-meta">Empty</span>}
             </button>
             {open && renderNodes(n.children, depth + 1, scope)}
           </div>
@@ -328,7 +328,6 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
             );
           })
         : renderNodes(tree, 0, "")}
-      <div className="tree-hint">Drag onto a folder to move · drop files from your computer to upload</div>
       {groupMenu && (
         <>
           <div className="menu-backdrop" onClick={() => setGroupMenu(null)} onContextMenu={(e) => { e.preventDefault(); setGroupMenu(null); }} />

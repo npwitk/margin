@@ -30,7 +30,7 @@ const STARTERS = [
   "Split the remaining work into tasks on the board",
 ];
 
-/** The ✦ panel: Margin's built-in assistant, or one of your own agents through Margin Connect. */
+/** The Assistant panel: Margin's built-in assistant, or one of your own agents through Margin Connect. */
 export function AssistantPanel(props: Props) {
   const connect = useConnect(props.projectId);
   const choices = useAgentChoices(connect);
@@ -46,7 +46,7 @@ export function AssistantPanel(props: Props) {
     <div className="assistant-wrap">
       <div className="source-bar">
         <select value={choice || source === "margin" || source === "setup" ? source : "margin"} onChange={(e) => { setFocusThread(undefined); setSource(e.target.value); }}>
-          <option value="margin">✦ Margin assistant (Claude API)</option>
+          <option value="margin">Margin assistant (Claude API)</option>
           {choices.map((c) => (
             <option key={`${c.device.id}|${c.agent.id}`} value={`${c.device.id}|${c.agent.id}`} disabled={!c.agent.available}>
               {c.agent.name} · {c.device.name}{c.agent.available ? "" : " (not installed)"}
@@ -148,14 +148,14 @@ function MarginAssistant({ projectId, session, settings, request, onOpenSettings
       <div className="assistant-body" ref={scroller}>
         {noKey ? (
           <div className="assistant-empty">
-            <div className="spark lg">✦</div>
+            <div className="spark lg"><Icon name="sparkle" size={20} /></div>
             <h3>Use Claude with your paper</h3>
             <p className="muted small">Add your Anthropic API key to chat with Claude about this project. It reads your files and leaves suggestions you can accept.</p>
             <button className="btn primary" onClick={onOpenSettings}>Add API key</button>
           </div>
         ) : entries.length === 0 && !live ? (
           <div className="assistant-empty">
-            <div className="spark lg">✦</div>
+            <div className="spark lg"><Icon name="sparkle" size={20} /></div>
             <h3>Ask Claude about this paper</h3>
             <p className="muted small">Claude can read every file, search, compile and check the board. It never edits directly: changes arrive as suggestions in the Review panel.</p>
             <div className="starters">
@@ -203,7 +203,7 @@ function Entry({ entry, streaming, onOpenSuggestion }: { entry: ChatEntry; strea
   }
   return (
     <div className="msg assistant-msg">
-      <span className="spark">✦</span>
+      <span className="spark"><Icon name="sparkle" size={12} /></span>
       <div className="msg-body">
         <div className="msg-author">Claude</div>
         {entry.parts.map((p, i) => p.type === "text"

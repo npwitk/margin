@@ -128,7 +128,7 @@ export function ReviewView({ project, settings, onProjectChange, onOpenSettings,
             <button className="btn primary block" onClick={onOpenSettings}>Add API key to review</button>
           ) : (
             <button className="btn primary block" onClick={run} disabled={reviews.some((r) => r.status === "running")}>
-              {reviews.some((r) => r.status === "running") ? <><Spinner /> Reviewing…</> : <>✦ Review the paper</>}
+              {reviews.some((r) => r.status === "running") ? <><Spinner /> Reviewing…</> : <><Icon name="sparkle" size={13} />Review the paper</>}
             </button>
           )}
           <p className="muted small">{(() => {

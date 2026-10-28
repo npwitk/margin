@@ -4,7 +4,7 @@ import { api } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Modal } from "./Dialog.tsx";
-import { Icon, Spinner } from "./Icon.tsx";
+import { AppMark, Icon, Spinner } from "./Icon.tsx";
 import { WorkspaceDialog } from "./WorkspaceDialog.tsx";
 import { load, save } from "../lib/storage.ts";
 import { pageThumbnail } from "../lib/thumbnails.ts";
@@ -21,6 +21,8 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
   const [creating, setCreating] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [admin, setAdmin] = useState(false);
+  const [query, setQuery] = useState("");
+  const shownProjects = projects?.filter((p) => !query.trim() || p.name.toLowerCase().includes(query.trim().toLowerCase()));
   const [layout, setLayoutState] = useState<"grid" | "list">(() => load("projectsLayout", "grid"));
   const setLayout = (l: "grid" | "list") => { setLayoutState(l); save("projectsLayout", l); };
   useEffect(() => { api.workspace().then((w) => setAdmin(w.admin)).catch(() => {}); }, []);
@@ -41,25 +43,31 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
   return (
     <div className="projects-page">
       <header className="topbar">
-        <div className="logo">M</div>
+        <AppMark size={22} />
         <span className="project-name static">Margin</span>
         <div className="spacer" />
-        <button className="btn ghost" onClick={() => navigate({ name: "library" })}><Icon name="book" size={13} />Library</button>
-        <button className="btn ghost" onClick={() => setMembersOpen(true)}><Icon name="plus" size={13} />{admin ? "Members & invites" : "Members"}</button>
+        <button className="btn ghost" onClick={() => navigate({ name: "library" })}><Icon name="book" size={14} />Library</button>
+        <button className="btn ghost" onClick={() => setMembersOpen(true)}><Icon name="people" size={14} />{admin ? "Members & invites" : "Members"}</button>
         <span className="muted small">{session.name}</span>
         <button className="icon-btn" title="Sign out" onClick={async () => { await api.logout(); onLogout(); }}><Icon name="logout" /></button>
       </header>
       <main className="projects">
-        <div className="row">
+        <div className="row projects-head">
           <h2>Projects</h2>
           <div className="spacer" />
+          {!!projects && projects.length > 3 && (
+            <label className="search-field">
+              <Icon name="search" size={13} />
+              <input placeholder="Search" value={query} onChange={(e) => setQuery(e.target.value)} />
+            </label>
+          )}
           {!!projects?.length && (
             <div className="segmented layout-toggle">
-              <button className={layout === "grid" ? "active" : ""} onClick={() => setLayout("grid")} title="Cards with previews">Grid</button>
-              <button className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} title="Compact list">List</button>
+              <button className={layout === "grid" ? "active" : ""} onClick={() => setLayout("grid")} title="Gallery" aria-label="Gallery"><Icon name="grid" size={13} /></button>
+              <button className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} title="List" aria-label="List"><Icon name="list" size={13} /></button>
             </div>
           )}
-          <button className="btn primary" onClick={() => setCreating(true)}><Icon name="plus" size={14} />New paper <kbd>N</kbd></button>
+          <button className="btn primary" onClick={() => setCreating(true)} title="New paper (N)"><Icon name="plus" size={14} />New paper</button>
         </div>
         {error && <p className="error">{error}</p>}
         {!projects && !error && <Spinner />}
@@ -73,11 +81,11 @@ export function Projects({ session, onLogout }: { session: Session; onLogout(): 
         )}
         {layout === "grid" ? (
           <div className="project-grid">
-            {projects?.map((p) => <ProjectCard key={p.id} project={p} />)}
+            {shownProjects?.map((p) => <ProjectCard key={p.id} project={p} />)}
           </div>
         ) : (
           <div className="project-list">
-            {projects?.map((p) => (
+            {shownProjects?.map((p) => (
               <button key={p.id} className="project-row" onClick={() => navigate({ name: "project", id: p.id })}>
                 <Icon name="file" size={15} className="muted" />
                 <span className="grow">{p.name}</span>
@@ -136,7 +144,7 @@ function NewProject({ onClose }: { onClose(): void }) {
         <div className="segmented mode-tabs">
           <button type="button" className={mode === "template" ? "active" : ""} onClick={() => setMode("template")}>From a template</button>
           <button type="button" className={mode === "import" ? "active" : ""} onClick={() => setMode("import")}>Import existing</button>
-          <button type="button" className={mode === "idea" ? "active" : ""} onClick={() => setMode("idea")}>✦ From an idea</button>
+          <button type="button" className={mode === "idea" ? "active" : ""} onClick={() => setMode("idea")}>From an idea</button>
         </div>
 
         {mode === "template" && (
@@ -188,7 +196,7 @@ function NewProject({ onClose }: { onClose(): void }) {
         <div className="modal-actions">
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy || !canSubmit}>
-            {busy ? <Spinner /> : mode === "template" ? "Create" : mode === "import" ? "Import" : "✦ Plan my paper"}
+            {busy ? <Spinner /> : mode === "template" ? "Create" : mode === "import" ? "Import" : "Plan my paper"}
           </button>
         </div>
       </form>
@@ -269,8 +277,7 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="card-info">
         <div className="card-name">{project.name}</div>
         <div className="muted small card-meta">
-          <span className="ellipsis">{project.mainFile}{others > 0 ? ` · +${others} document${others > 1 ? "s" : ""}` : ""}</span>
-          <span className="card-time">{relativeTime(project.updatedAt)}</span>
+          <span className="ellipsis">{relativeTime(project.updatedAt)}{others > 0 ? ` · ${others + 1} documents` : ""}</span>
         </div>
       </div>
     </button>
