@@ -1,0 +1,52 @@
+\documentclass{tufte-handout}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\title{{{TITLE}}}
+\author{Your Name}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\section{Introduction}
+
+Tufte-style handouts keep the main text narrow and put notes, small figures
+and references in the wide margin.\sidenote{Like this side note, numbered
+like a footnote but placed next to the text it explains.} Citations appear in
+the margin too.\cite{mcmahan2017communication}
+
+\marginnote{A margin note has no number.}
+Use them for asides that would interrupt the flow of the argument.
+
+\section{Method}
+
+The loss we minimise is
+\[
+  \mathcal{L}(\theta) = -\sum_{i=1}^{N} \log p_\theta(y_i \mid x_i).
+\]
+
+\begin{table}
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Method & Accuracy & Rounds \\
+    \midrule
+    Baseline & 81.2 & 500 \\
+    Ours & 85.3 & 180 \\
+    \bottomrule
+  \end{tabular}
+  \caption{A full-width table sits in the text column.}
+\end{table}
+
+\bibliography{references}
+\bibliographystyle{plainnat}
+
+\end{document}

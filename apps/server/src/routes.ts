@@ -7,7 +7,7 @@ import { bodyLimit } from "hono/body-limit";
 import { zipSync } from "fflate";
 import {
   acceptSuggestion, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf,
-  type CompileResult, type Engine, type ThreadKind, type ThreadStatus,
+  type CompileResult, type Engine, type ProjectVenue, type ThreadKind, type ThreadStatus,
 } from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
 import { compileProject, compileWorker } from "./compile.ts";
@@ -80,8 +80,8 @@ export const projectRoutes = new Hono<AppEnv>()
   })
 
   .post("/", limit("create", 20, 3600), async (c) => {
-    const { name, template } = await c.req.json<{ name: string; template?: string }>();
-    const project = await createProject(name, template ?? "article", c.get("session").name);
+    const { name, template, venue } = await c.req.json<{ name: string; template?: string; venue?: ProjectVenue }>();
+    const project = await createProject(name, template ?? "article", c.get("session").name, venue);
     await addOwner(project.id, c.get("session"));
     return c.json(project, 201);
   })

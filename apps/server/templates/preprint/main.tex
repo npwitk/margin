@@ -1,0 +1,35 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{newpxtext,newpxmath}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[numbers]{natbib}
+\usepackage{authblk}
+\usepackage{xcolor}
+\usepackage[colorlinks,allcolors=blue!55!black]{hyperref}
+
+\title{\bfseries {{TITLE}}}
+\author[1]{First Author}
+\author[2]{Second Author}
+\affil[1]{University One}
+\affil[2]{University Two}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\input{sections/introduction}
+\input{sections/method}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

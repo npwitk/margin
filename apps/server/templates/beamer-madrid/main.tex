@@ -1,0 +1,64 @@
+\documentclass[aspectratio=169]{beamer}
+
+\usetheme{Madrid}
+\usecolortheme{default}
+\usepackage{booktabs}
+
+\title{{{TITLE}}}
+\subtitle{Conference talk}
+\author{Your Name}
+\institute{University One}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Outline}
+  \tableofcontents
+\end{frame}
+
+\section{Motivation}
+
+\begin{frame}{The problem}
+  \begin{itemize}
+    \item Who is affected, and what goes wrong today
+    \item Why existing approaches fall short
+    \item What we set out to do
+  \end{itemize}
+\end{frame}
+
+\section{Approach}
+
+\begin{frame}{Our idea}
+  We train on data that never leaves the device:
+  \[
+    \min_{w} \; \sum_{k=1}^{K} \frac{n_k}{n} F_k(w)
+  \]
+  \begin{itemize}
+    \item Clients send updates, not data
+    \item The server only sees the aggregate
+  \end{itemize}
+\end{frame}
+
+\section{Results}
+
+\begin{frame}{What we found}
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Method & Accuracy & Rounds \\
+    \midrule
+    Baseline & 81.2 & 500 \\
+    Ours & \textbf{85.3} & \textbf{180} \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+\begin{frame}{Thank you}
+  \centering Questions?
+\end{frame}
+
+\end{document}

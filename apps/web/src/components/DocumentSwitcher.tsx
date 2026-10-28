@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { DOCUMENT_TEMPLATES, documentLabels, type DocumentInfo, type Engine } from "@margin/shared";
+import { documentLabels, templateById, type DocumentInfo, type Engine } from "@margin/shared";
 import { Modal } from "./Dialog.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
+import { TemplateGallery } from "./TemplateGallery.tsx";
 
 const ENGINE_LABEL: Record<Engine, string> = { pdflatex: "pdfLaTeX", xelatex: "XeLaTeX", lualatex: "LuaLaTeX" };
 const KIND: Record<string, string> = { beamer: "Slides", letter: "Letter", tikzposter: "Poster", IEEEtran: "IEEE", article: "Article", report: "Report", book: "Book", standalone: "Figure" };
@@ -126,73 +127,75 @@ export function NewDocumentDialog({ defaultDir, docs, onCreate, onClose }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const labels = documentLabels(docs);
-  const fallback = from === "copy" ? `${(copyFrom.includes("/") ? copyFrom.slice(0, copyFrom.lastIndexOf("/")).split("/").pop() : "document")}-copy` : DOCUMENT_TEMPLATES.find((t) => t.id === template)!.label;
+  const fallback = from === "copy" ? `${(copyFrom.includes("/") ? copyFrom.slice(0, copyFrom.lastIndexOf("/")).split("/").pop() : "document")}-copy` : templateById(template)?.name ?? "document";
   const slug = ((title || fallback).toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "document").slice(0, 40);
-  const ownFolder = from === "copy" || layout === "folder";
+  const ownFolder = from === "copy" || layout === "folder" || !templateById(template)?.beside;
   const where = ownFolder
     ? `${slug}/${from === "copy" ? copyFrom.split("/").pop() : "main.tex"}`
     : `${defaultDir === "." ? "" : `${defaultDir}/`}${slug}.tex`;
 
+  const chosen = templateById(template);
+  const canBeside = !!chosen?.beside;
   return (
-    <Modal onClose={onClose} wide>
-      <form onSubmit={async (e) => {
+    <Modal onClose={onClose} className={from === "template" ? "gallery-modal" : "wide"}>
+      <form className={from === "template" ? "gallery-form" : undefined} onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
         setError(null);
-        try { await onCreate({ title: title.trim(), template, layout: ownFolder ? "folder" : "beside", copyFrom: from === "copy" ? copyFrom : undefined }); }
+        try { await onCreate({ title: title.trim(), template, layout: ownFolder || !canBeside ? "folder" : "beside", copyFrom: from === "copy" ? copyFrom : undefined }); }
         catch (err) { setError((err as Error).message); setBusy(false); }
       }}>
-        <h3 className="modal-title">New document</h3>
-        <p className="muted small">Another paper, a journal version, slides, a cover letter or a rebuttal, in the same project.</p>
-        <input className="input" autoFocus placeholder="Title, e.g. Journal version" value={title} onChange={(e) => setTitle(e.target.value)} />
-
-        <div className="newdoc-label">Start from</div>
-        <div className="segmented newdoc-seg">
-          <button type="button" className={from === "template" ? "active" : ""} onClick={() => setFrom("template")}>A template</button>
-          <button type="button" className={from === "copy" ? "active" : ""} onClick={() => setFrom("copy")} disabled={!docs.length}>A copy of a document</button>
-        </div>
-        {from === "template" ? (
-          <div className="templates doc-templates">
-            {DOCUMENT_TEMPLATES.map((t) => (
-              <label key={t.id} className={`template ${template === t.id ? "active" : ""}`}>
-                <input type="radio" name="doc-template" checked={template === t.id} onChange={() => setTemplate(t.id)} />
-                <span className="template-label">{t.label}</span>
-                <span className="muted small">{t.hint}</span>
-              </label>
-            ))}
+        <div className="gallery-head">
+          <h3 className="modal-title">New document</h3>
+          <div className="segmented mode-tabs">
+            <button type="button" className={from === "template" ? "active" : ""} onClick={() => setFrom("template")}>Templates</button>
+            <button type="button" className={from === "copy" ? "active" : ""} onClick={() => setFrom("copy")} disabled={!docs.length}>Copy of a document</button>
           </div>
+        </div>
+
+        {from === "template" ? (
+          <TemplateGallery selected={template} onSelect={setTemplate} conferences={false}
+            onChoose={(id) => { setTemplate(id); (document.querySelector(".gallery-foot input") as HTMLInputElement | null)?.focus(); }} />
         ) : (
-          <label className="lib-field">
-            <select value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)}>
-              {docs.map((d) => <option key={d.path} value={d.path}>{labels.get(d.path) ?? d.title} ({d.path})</option>)}
-            </select>
-            <span className="muted small">Copies its whole folder: the .tex files, figures and .bib. Your edits go to the copy only.</span>
-          </label>
+          <>
+            <p className="muted small">Another version of a paper you already have, e.g. the journal version of a conference paper.</p>
+            <label className="lib-field">
+              <select value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)}>
+                {docs.map((d) => <option key={d.path} value={d.path}>{labels.get(d.path) ?? d.title} ({d.path})</option>)}
+              </select>
+              <span className="muted small">Copies its whole folder: the .tex files, figures and .bib. Your edits go to the copy only.</span>
+            </label>
+            <input className="input newdoc-title" placeholder="Title, e.g. Journal version" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <p className="muted small lib-help">Creates <code>{where}</code></p>
+          </>
         )}
 
-        {from === "template" && (
+        {from === "template" ? (
+          <div className="gallery-foot">
+            <div className="gallery-pick">
+              <span className="gallery-pick-name">{chosen?.name}</span>
+              <span className="muted small ellipsis">Creates <code>{where}</code></span>
+            </div>
+            {canBeside && (
+              <div className="segmented where-seg" title="Its own folder: separate main.tex, sections, figures and .bib. Next to the paper: one file that shares the paper's .bib and figures.">
+                <button type="button" className={layout === "folder" ? "active" : ""} onClick={() => setLayout("folder")}>Own folder</button>
+                <button type="button" className={layout === "beside" ? "active" : ""} onClick={() => setLayout("beside")}>Next to paper</button>
+              </div>
+            )}
+            <input className="input" placeholder="Title, e.g. Conference talk" value={title} onChange={(e) => setTitle(e.target.value)} />
+            {error && <p className="error small">{error}</p>}
+            <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+            <button className="btn primary" disabled={busy}>{busy ? <Spinner /> : "Create"}</button>
+          </div>
+        ) : (
           <>
-            <div className="newdoc-label">Where</div>
-            <div className="templates newdoc-where">
-              <label className={`template ${layout === "folder" ? "active" : ""}`}>
-                <input type="radio" name="doc-layout" checked={layout === "folder"} onChange={() => setLayout("folder")} />
-                <span className="template-label">Its own folder</span>
-                <span className="muted small">A separate document with its own main.tex, sections, figures and .bib</span>
-              </label>
-              <label className={`template ${layout === "beside" ? "active" : ""}`}>
-                <input type="radio" name="doc-layout" checked={layout === "beside"} onChange={() => setLayout("beside")} />
-                <span className="template-label">Next to the main paper</span>
-                <span className="muted small">One file that shares the paper's .bib and figures (good for slides or a rebuttal)</span>
-              </label>
+            {error && <p className="error small">{error}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+              <button className="btn primary" disabled={busy || !copyFrom}>{busy ? <Spinner /> : "Create"}</button>
             </div>
           </>
         )}
-        <p className="muted small lib-help">Creates <code>{where}</code></p>
-        {error && <p className="error small">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy || (from === "copy" && !copyFrom)}>{busy ? <Spinner /> : "Create"}</button>
-        </div>
       </form>
     </Modal>
   );

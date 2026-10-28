@@ -1,0 +1,68 @@
+\documentclass[final]{beamer}
+
+\usepackage[size=a0,orientation=portrait,scale=1.35]{beamerposter}
+\usepackage{booktabs}
+\usepackage{amsmath}
+
+\definecolor{ink}{HTML}{1D1D1F}
+\definecolor{accent}{HTML}{0071E3}
+\definecolor{soft}{HTML}{F2F2F7}
+\setbeamertemplate{navigation symbols}{}
+\setbeamercolor{normal text}{fg=ink,bg=white}
+\setbeamercolor{block title}{fg=white,bg=accent}
+\setbeamercolor{block body}{fg=ink,bg=soft}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+\setbeamerfont{block title}{size=\large,series=\bfseries}
+\setbeamertemplate{itemize item}{\color{accent}$\bullet$}
+
+\title{{{TITLE}}}
+\author{First Author \and Second Author}
+\institute{University One}
+
+\begin{document}
+\begin{frame}[t]
+
+  \vspace{1.5cm}
+  \begin{center}
+    {\VeryHuge\bfseries\color{ink}\inserttitle\par}\vspace{1cm}
+    {\Large\insertauthor\par}\vspace{0.3cm}
+    {\large\color{accent}\insertinstitute\par}
+  \end{center}
+  \vspace{1.5cm}
+
+  \begin{columns}[t]
+    \begin{column}{0.46\paperwidth}
+      \begin{block}{Motivation}
+        Who is affected, what goes wrong today, and why existing approaches fall short.
+        \begin{itemize}
+          \item First reason it matters
+          \item Second reason it matters
+        \end{itemize}
+      \end{block}
+      \vspace{1cm}
+      \begin{block}{Approach}
+        We minimise
+        \[ \mathcal{L}(\theta) = -\sum_{i=1}^{N} \log p_\theta(y_i \mid x_i). \]
+      \end{block}
+    \end{column}
+    \begin{column}{0.46\paperwidth}
+      \begin{block}{Results}
+        \centering
+        \begin{tabular}{lrr}
+          \toprule
+          Method & Accuracy & Rounds \\
+          \midrule
+          Baseline & 81.2 & 500 \\
+          Ours & \textbf{85.3} & \textbf{180} \\
+          \bottomrule
+        \end{tabular}
+      \end{block}
+      \vspace{1cm}
+      \begin{block}{Conclusion}
+        The one thing to remember.
+      \end{block}
+    \end{column}
+  \end{columns}
+
+\end{frame}
+\end{document}

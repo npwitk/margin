@@ -1,0 +1,44 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[numbers]{natbib}
+\usepackage{xcolor}
+\usepackage[colorlinks,allcolors=blue!55!black]{hyperref}
+
+\begin{document}
+
+\begin{titlepage}
+  \vspace*{3cm}
+  {\color{blue!55!black}\large\bfseries Technical Report TR-\the\year-01\par}
+  \vspace{1cm}
+  \rule{\linewidth}{0.6pt}\par\vspace{0.6cm}
+  {\Huge\bfseries {{TITLE}}\par}
+  \vspace{0.6cm}\rule{\linewidth}{0.6pt}\par
+  \vspace{1.5cm}
+  {\Large First Author \quad Second Author\par}
+  \vspace{0.4cm}
+  {\large University One\par}
+  \vfill
+  \begin{abstract}
+  One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+  \end{abstract}
+  \vspace{1cm}
+  {\large\today\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\input{sections/introduction}
+\input{sections/method}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

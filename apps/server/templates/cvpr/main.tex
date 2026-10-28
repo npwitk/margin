@@ -1,0 +1,44 @@
+% CVPR, from the official author kit (github.com/cvpr-org/author-kit).
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+% [review] for submission; no option for the camera-ready version; [pagenumbers] for arXiv.
+\usepackage[review]{cvpr}
+
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
+
+\def\paperID{*****} % Enter your paper ID here
+\def\confName{CVPR}
+\def\confYear{2026}
+
+\title{{{TITLE}}}
+
+\author{First Author\\
+University One\\
+{\tt\small first@example.com}
+\and
+Second Author\\
+University Two\\
+{\tt\small second@example.com}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\input{sections/introduction}
+\input{sections/method}
+
+{
+  \small
+  \bibliographystyle{ieeenat_fullname}
+  \bibliography{references}
+}
+
+\end{document}

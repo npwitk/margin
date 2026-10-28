@@ -1,3 +1,4 @@
+import type { ProjectVenue } from "./templates.ts";
 export type Engine = "pdflatex" | "xelatex" | "lualatex";
 
 export interface Project {
@@ -10,6 +11,8 @@ export interface Project {
   documents?: DocumentSettings[];
   /** What the paper is aiming for, e.g. "NeurIPS 2027 main track". Used by the AI reviewer. */
   goal?: string;
+  /** The conference it was started for (from the template gallery), with its deadline. */
+  venue?: ProjectVenue;
   /** Set while Claude is turning an idea into a first draft. */
   setup?: { status: "planning" | "done" | "error"; error?: string };
   createdAt: string;

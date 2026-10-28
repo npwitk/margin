@@ -1,0 +1,64 @@
+\documentclass[11pt]{amsart}
+
+\usepackage{amssymb}
+\usepackage[hidelinks]{hyperref}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\title{{{TITLE}}}
+
+\author{First Author}
+\address{Department of Mathematics, University One, City, Country}
+\email{first@example.com}
+
+\author{Second Author}
+\address{Department of Mathematics, University Two, City, Country}
+
+\subjclass[2020]{Primary 05C35; Secondary 11B75}
+\keywords{keyword one, keyword two}
+
+\begin{document}
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+
+State the question and the main result first.
+
+\begin{theorem}\label{thm:main}
+For every integer $n \ge 1$,
+\[
+  \sum_{k=1}^{n} k = \frac{n(n+1)}{2}.
+\]
+\end{theorem}
+
+\begin{proof}
+By induction on $n$. The case $n = 1$ is immediate, and adding $n+1$ to both
+sides of the statement for $n$ gives the statement for $n+1$.
+\end{proof}
+
+\begin{remark}
+Theorem~\ref{thm:main} is classical; see~\cite{mcmahan2017communication} for a citation example.
+\end{remark}
+
+\section{Preliminaries}
+
+\begin{definition}
+A \emph{graph} is a pair $G = (V, E)$ where $E \subseteq \binom{V}{2}$.
+\end{definition}
+
+\bibliographystyle{amsplain}
+\bibliography{references}
+
+\end{document}

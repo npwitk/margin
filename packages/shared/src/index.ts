@@ -7,3 +7,4 @@ export * from "./bibtex.ts";
 export * from "./connect.ts";
 export * from "./library.ts";
 export * from "./outline.ts";
+export * from "./templates.ts";

@@ -1,0 +1,49 @@
+\documentclass[12pt,a4paper,oneside,openany]{book}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{setspace}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[numbers]{natbib}
+\usepackage[hidelinks]{hyperref}
+
+\onehalfspacing
+
+\begin{document}
+
+\frontmatter
+\begin{titlepage}
+  \centering
+  \vspace*{2cm}
+  {\large University One\par}
+  \vspace{3cm}
+  {\Huge\bfseries {{TITLE}}\par}
+  \vspace{2cm}
+  {\Large Your Name\par}
+  \vfill
+  A thesis submitted in partial fulfilment of the requirements\\
+  for the degree of Doctor of Philosophy\par
+  \vspace{1cm}
+  {\large Department of Computer Science\\ \the\year\par}
+\end{titlepage}
+
+\chapter*{Abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+
+\chapter*{Acknowledgements}
+Thank the people who helped.
+
+\tableofcontents
+
+\mainmatter
+\input{chapters/introduction}
+\input{chapters/background}
+
+\backmatter
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

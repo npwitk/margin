@@ -1,12 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import { cp, lstat, mkdir, readdir, readFile, rm, stat, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
-import type { Engine, FileEntry, Project } from "@margin/shared";
+import { templateById, type Engine, type FileEntry, type Project, type ProjectVenue } from "@margin/shared";
 import { BUILDS_DIR, PROJECTS_DIR, TEMPLATES_DIR } from "./config.ts";
 import { initRepo } from "./git.ts";
+import { kitFiles } from "./kits.ts";
 
 export class HttpError extends Error {
-  constructor(public status: 400 | 404 | 409 | 413, message: string) { super(message); }
+  constructor(public status: 400 | 404 | 409 | 413 | 502, message: string) { super(message); }
 }
 
 const META = path.join(".margin", "project.json");
@@ -57,21 +58,41 @@ export async function listProjects(): Promise<Project[]> {
   return projects.filter((p): p is Project => !!p).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-export const TEMPLATES = ["article", "ieee", "blank"] as const;
+/**
+ * Copy a gallery template into `dir`: its files, the venue's official style
+ * files when it needs them, and the title filled in.
+ */
+export async function copyTemplate(template: string, dir: string, title: string) {
+  if (!templateById(template)) throw new HttpError(400, "Unknown template");
+  const files = await kitFiles(template); // first, so a failed download leaves nothing behind
+  await mkdir(dir, { recursive: true });
+  await cp(path.join(TEMPLATES_DIR, template), dir, { recursive: true });
+  for (const [name, data] of Object.entries(files)) await writeFile(path.join(dir, name), data);
+  const main = path.join(dir, "main.tex");
+  const escaped = title.replace(/[\\{}$&#^_%~]/g, (ch) => `\\${ch}`);
+  await writeFile(main, (await readFile(main, "utf8")).replaceAll("{{TITLE}}", escaped));
+}
 
-export async function createProject(name: string, template: string, author: string): Promise<Project> {
-  if (!TEMPLATES.includes(template as (typeof TEMPLATES)[number])) throw new HttpError(400, "Unknown template");
+export async function createProject(name: string, template: string, author: string, venue?: ProjectVenue): Promise<Project> {
+  const info = templateById(template);
+  if (!info) throw new HttpError(400, "Unknown template");
   const title = name.trim().slice(0, 120) || "Untitled paper";
   const id = `${slugify(title)}-${randomBytes(3).toString("hex")}`;
   const dir = projectDir(id);
+  try {
+    await copyTemplate(template, dir, title);
+  } catch (err) {
+    await rm(dir, { recursive: true, force: true });
+    throw err;
+  }
   await mkdir(path.join(dir, ".margin"), { recursive: true });
-  await cp(path.join(TEMPLATES_DIR, template), dir, { recursive: true });
-  const main = path.join(dir, "main.tex");
-  const escaped = title.replace(/[\\{}$&#^_%~]/g, (ch) => `\\${ch}`);
-  await writeFile(main, (await readFile(main, "utf8")).replace("{{TITLE}}", escaped));
 
   const now = new Date().toISOString();
-  const project: Project = { id, name: title, mainFile: "main.tex", engine: "pdflatex", createdAt: now, updatedAt: now };
+  const project: Project = { id, name: title, mainFile: "main.tex", engine: info.engine ?? "pdflatex", createdAt: now, updatedAt: now };
+  if (venue?.name) {
+    project.venue = { name: venue.name.slice(0, 60), year: venue.year, deadline: venue.deadline ?? null, link: venue.link?.startsWith("https://") ? venue.link : undefined };
+    project.goal = `${venue.name}${venue.year ? ` ${venue.year}` : ""}`;
+  }
   await saveProject(project);
   await initRepo(dir, author);
   return project;

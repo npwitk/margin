@@ -1,0 +1,39 @@
+%% ACM journal article (TOPS, CSUR, PACM, CSCW…), single column.
+\documentclass[acmsmall,review,anonymous]{acmart}
+
+\setcopyright{none}
+\settopmatter{printacmref=false}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+
+\begin{document}
+
+\title{{{TITLE}}}
+
+\author{First Author}
+\affiliation{%
+  \institution{University One}
+  \city{City}
+  \country{Country}}
+\email{first@example.com}
+
+\author{Second Author}
+\affiliation{%
+  \institution{University Two}
+  \city{City}
+  \country{Country}}
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\keywords{keyword one, keyword two}
+
+\maketitle
+
+\input{sections/introduction}
+\input{sections/method}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}

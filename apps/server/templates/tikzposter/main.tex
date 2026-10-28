@@ -1,0 +1,51 @@
+\documentclass[25pt,a0paper,landscape]{tikzposter}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+
+\title{{{TITLE}}}
+\author{First Author, Second Author}
+\institute{University One}
+
+\usetheme{Simple}
+\usecolorstyle{Denmark}
+
+\begin{document}
+
+\maketitle
+
+\begin{columns}
+  \column{0.33}
+  \block{Motivation}{
+    Who is affected, what goes wrong today, and why existing approaches fall short.
+    \vspace{1em}
+    \begin{itemize}
+      \item First reason it matters
+      \item Second reason it matters
+    \end{itemize}
+  }
+  \block{Approach}{
+    We minimise
+    \[ \mathcal{L}(\theta) = -\sum_{i=1}^{N} \log p_\theta(y_i \mid x_i). \]
+  }
+
+  \column{0.34}
+  \block{Results}{
+    \centering
+    \begin{tabular}{lrr}
+      \toprule
+      Method & Accuracy & Rounds \\
+      \midrule
+      Baseline & 81.2 & 500 \\
+      Ours & \textbf{85.3} & \textbf{180} \\
+      \bottomrule
+    \end{tabular}
+  }
+  \block{Analysis}{Explain what the results show and why.}
+
+  \column{0.33}
+  \block{Conclusion}{The one thing to remember.}
+  \block{Contact}{first@example.com}
+\end{columns}
+
+\end{document}

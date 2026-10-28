@@ -15,6 +15,7 @@ import { aiProjectRoutes, aiSettingsRoutes } from "./ai/routes.ts";
 import { handleGit } from "./gitHttp.ts";
 import { projectRoutes, tokenRoutes, workspaceRoutes } from "./routes.ts";
 import { libraryRoutes, projectLibraryRoutes } from "./library.ts";
+import { conferenceRoutes } from "./conferences.ts";
 
 const app = new Hono<AppEnv>();
 app.use("*", logger());
@@ -57,6 +58,8 @@ app.route("/api/workspace", workspaceRoutes);
 app.use("/api/library/*", requireSession);
 app.use("/api/library", requireSession);
 app.route("/api/library", libraryRoutes);
+app.use("/api/conferences", requireSession);
+app.route("/api/conferences", conferenceRoutes);
 app.use("/api/tokens/*", requireSession);
 app.use("/api/tokens", requireSession);
 app.route("/api/tokens", tokenRoutes);

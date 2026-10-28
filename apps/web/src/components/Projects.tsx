@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { DocumentInfo, Project, Session } from "@margin/shared";
+import { templateById, type ConferenceEdition, type DocumentInfo, type Project, type Session } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { relativeTime } from "../lib/time.ts";
@@ -8,12 +8,8 @@ import { AppMark, Icon, Spinner } from "./Icon.tsx";
 import { WorkspaceDialog } from "./WorkspaceDialog.tsx";
 import { load, save } from "../lib/storage.ts";
 import { pageThumbnail } from "../lib/thumbnails.ts";
+import { TemplateGallery, untilDeadline } from "./TemplateGallery.tsx";
 
-const TEMPLATES = [
-  { id: "article", label: "Article", hint: "Sections, natbib, a references folder" },
-  { id: "ieee", label: "IEEE conference", hint: "IEEEtran two-column" },
-  { id: "blank", label: "Blank", hint: "Just main.tex" },
-];
 
 export function Projects({ session, onLogout }: { session: Session; onLogout(): void }) {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -108,6 +104,7 @@ function NewProject({ onClose }: { onClose(): void }) {
   const [mode, setMode] = useState<Mode>("template");
   const [name, setName] = useState("");
   const [template, setTemplate] = useState("article");
+  const [venue, setVenue] = useState<ConferenceEdition | null>(null);
   const [source, setSource] = useState<"zip" | "arxiv" | "git">("zip");
   const [file, setFile] = useState<File | null>(null);
   const [ref, setRef] = useState("");
@@ -117,7 +114,7 @@ function NewProject({ onClose }: { onClose(): void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = mode === "template" ? !!name.trim()
+  const canSubmit = mode === "template" ? !!template
     : mode === "import" ? (source === "zip" ? !!file : !!ref.trim())
     : idea.trim().length >= 20;
 
@@ -127,7 +124,8 @@ function NewProject({ onClose }: { onClose(): void }) {
     setError(null);
     try {
       let p: Project;
-      if (mode === "template") p = await api.createProject(name, template);
+      if (mode === "template") p = await api.createProject(name.trim() || (venue ? `${venue.name} ${venue.year} paper` : templateById(template)?.name ?? "Untitled"), template,
+        venue ? { name: venue.name, year: venue.year, deadline: venue.deadline, link: venue.link } : undefined);
       else if (mode === "import") p = source === "zip" ? await api.importZip(file!) : await api.importFrom(source === "arxiv" ? { arxiv: ref } : { git: ref });
       else p = await api.fromIdea({ idea, goal, template, members: members.split(",").map((m) => m.trim()).filter(Boolean) });
       navigate({ name: "project", id: p.id });
@@ -137,21 +135,22 @@ function NewProject({ onClose }: { onClose(): void }) {
     }
   };
 
+  const chosen = templateById(template);
   return (
-    <Modal onClose={onClose} wide>
-      <form onSubmit={submit}>
-        <h3 className="modal-title">New paper</h3>
-        <div className="segmented mode-tabs">
-          <button type="button" className={mode === "template" ? "active" : ""} onClick={() => setMode("template")}>From a template</button>
-          <button type="button" className={mode === "import" ? "active" : ""} onClick={() => setMode("import")}>Import existing</button>
-          <button type="button" className={mode === "idea" ? "active" : ""} onClick={() => setMode("idea")}>From an idea</button>
+    <Modal onClose={onClose} className={mode === "template" ? "gallery-modal" : "wide"}>
+      <form onSubmit={submit} className={mode === "template" ? "gallery-form" : undefined}>
+        <div className="gallery-head">
+          <h3 className="modal-title">New paper</h3>
+          <div className="segmented mode-tabs">
+            <button type="button" className={mode === "template" ? "active" : ""} onClick={() => setMode("template")}>Templates</button>
+            <button type="button" className={mode === "import" ? "active" : ""} onClick={() => setMode("import")}>Import</button>
+            <button type="button" className={mode === "idea" ? "active" : ""} onClick={() => setMode("idea")}>From an idea</button>
+          </div>
         </div>
 
         {mode === "template" && (
-          <>
-            <input className="input" autoFocus placeholder="Working title" value={name} onChange={(e) => setName(e.target.value)} />
-            <TemplatePicker value={template} onChange={setTemplate} />
-          </>
+          <TemplateGallery selected={template} onSelect={setTemplate} venue={venue} onVenue={setVenue}
+            onChoose={(id) => { setTemplate(id); (document.querySelector(".gallery-foot input") as HTMLInputElement | null)?.focus(); }} />
         )}
 
         {mode === "import" && (
@@ -192,29 +191,33 @@ function NewProject({ onClose }: { onClose(): void }) {
           </>
         )}
 
+        {mode === "template" ? (
+          <div className="gallery-foot">
+            <div className="gallery-pick">
+              <span className="gallery-pick-name">{chosen?.name}</span>
+              {venue
+                ? <span className="venue-chip">For {venue.name} {venue.year}{venue.deadline ? ` · ${untilDeadline(venue.deadline).toLowerCase()}` : ""}
+                    <button type="button" onClick={() => setVenue(null)} aria-label="Remove conference"><Icon name="x" size={10} /></button></span>
+                : <span className="muted small">{chosen?.kit ? `Downloads the official style from ${chosen.kit.source}` : chosen?.detail}</span>}
+            </div>
+            <input className="input" placeholder={venue ? `${venue.name} ${venue.year} paper` : "Working title"} value={name} onChange={(e) => setName(e.target.value)} />
+            {error && <p className="error small">{error}</p>}
+            <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+            <button className="btn primary" disabled={busy || !canSubmit}>{busy ? <Spinner /> : "Create"}</button>
+          </div>
+        ) : (
+        <>
         {error && <p className="error small">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy || !canSubmit}>
-            {busy ? <Spinner /> : mode === "template" ? "Create" : mode === "import" ? "Import" : "Plan my paper"}
+            {busy ? <Spinner /> : mode === "import" ? "Import" : "Plan my paper"}
           </button>
         </div>
+        </>
+        )}
       </form>
     </Modal>
-  );
-}
-
-function TemplatePicker({ value, onChange }: { value: string; onChange(v: string): void }) {
-  return (
-    <div className="templates">
-      {TEMPLATES.map((t) => (
-        <label key={t.id} className={`template ${value === t.id ? "active" : ""}`}>
-          <input type="radio" name="template" value={t.id} checked={value === t.id} onChange={() => onChange(t.id)} />
-          <span className="template-label">{t.label}</span>
-          <span className="muted small">{t.hint}</span>
-        </label>
-      ))}
-    </div>
   );
 }
 
@@ -277,7 +280,9 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="card-info">
         <div className="card-name">{project.name}</div>
         <div className="muted small card-meta">
-          <span className="ellipsis">{relativeTime(project.updatedAt)}{others > 0 ? ` · ${others + 1} documents` : ""}</span>
+          {project.venue
+            ? <span className="ellipsis">{project.venue.name}{project.venue.year ? ` ${project.venue.year}` : ""}{project.venue.deadline && Date.parse(project.venue.deadline) > Date.now() ? <> · <span className="card-due">{untilDeadline(project.venue.deadline).toLowerCase()}</span></> : ` · ${relativeTime(project.updatedAt)}`}</span>
+            : <span className="ellipsis">{relativeTime(project.updatedAt)}{others > 0 ? ` · ${others + 1} documents` : ""}</span>}
         </div>
       </div>
     </button>

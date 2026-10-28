@@ -1,0 +1,35 @@
+\documentclass[journal]{IEEEtran}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage[hidelinks]{hyperref}
+
+\begin{document}
+
+\title{{{TITLE}}}
+
+\author{First~Author,~\IEEEmembership{Member,~IEEE,}
+        and~Second~Author%
+\thanks{F. Author and S. Author are with the Department of Computer Science, University One, City, Country (e-mail: first@example.com).}}
+
+\markboth{IEEE Transactions on Information Forensics and Security}%
+{Author \MakeLowercase{\textit{et al.}}: {{TITLE}}}
+
+\maketitle
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Keyword one, keyword two, keyword three.
+\end{IEEEkeywords}
+
+\input{sections/introduction}
+\input{sections/method}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

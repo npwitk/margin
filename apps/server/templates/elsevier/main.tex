@@ -1,0 +1,40 @@
+% Elsevier journals (Computers & Security, JISA, Neural Networks…).
+\documentclass[preprint,12pt]{elsarticle}
+
+\usepackage{amssymb,amsmath}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\journal{Computers \& Security}
+
+\begin{document}
+
+\begin{frontmatter}
+
+\title{{{TITLE}}}
+
+\author[one]{First Author\corref{cor}}
+\ead{first@example.com}
+\author[two]{Second Author}
+\cortext[cor]{Corresponding author}
+
+\affiliation[one]{organization={University One}, city={City}, country={Country}}
+\affiliation[two]{organization={University Two}, city={City}, country={Country}}
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\begin{keyword}
+keyword one \sep keyword two \sep keyword three
+\end{keyword}
+
+\end{frontmatter}
+
+\input{sections/introduction}
+\input{sections/method}
+
+\bibliographystyle{elsarticle-num}
+\bibliography{references}
+
+\end{document}

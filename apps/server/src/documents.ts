@@ -3,10 +3,11 @@ import path from "node:path";
 import {
   DOCUMENT_TEMPLATES, documentClassOf, documentTitleOf, isTextPath,
   type DocumentInfo, type DocumentSettings, type DocumentTemplate, type Engine, type Project, type Session,
+  templateById,
 } from "@margin/shared";
 import { textFiles, textOf } from "./ai/paper.ts";
 import { withDoc } from "./collab.ts";
-import { HttpError, getProject, listFiles, resolvePath, saveProject, workDir, writeBinary, writeText } from "./storage.ts";
+import { HttpError, copyTemplate, getProject, listFiles, resolvePath, saveProject, workDir, writeBinary, writeText } from "./storage.ts";
 
 /**
  * A project can hold several LaTeX documents: the paper, slides, a cover
@@ -334,7 +335,9 @@ export async function createDocument(projectId: string, input: {
   title?: string; template?: string; path?: string; content?: string; engine?: Engine; layout?: "folder" | "beside"; copyFrom?: string;
 }) {
   const project = await getProject(projectId);
-  const template = (DOCUMENT_TEMPLATES.some((t) => t.id === input.template) ? input.template : "article") as DocumentTemplate;
+  // A gallery template (ACM, NeurIPS, Metropolis…) in its own folder, or one of the generated ones.
+  const gallery = DOCUMENT_TEMPLATES.some((t) => t.id === input.template) ? undefined : templateById(input.template ?? "");
+  const template = (DOCUMENT_TEMPLATES.some((t) => t.id === input.template) ? input.template : gallery?.beside ?? "article") as DocumentTemplate;
   const title = (input.title ?? "").trim().slice(0, 120) || (input.copyFrom ? `Copy of ${path.posix.basename(path.posix.dirname(input.copyFrom)) || "document"}` : DOCUMENT_TEMPLATES.find((t) => t.id === template)!.label);
   let target: string;
 
@@ -362,8 +365,15 @@ export async function createDocument(projectId: string, input: {
       if (input.title?.trim()) await updateDocument(projectId, target, { title: input.title });
       return target;
     }
-    // A fresh, self-contained document folder.
     target = `${folder}/main.tex`;
+    if (gallery && !input.content?.trim()) {
+      await copyTemplate(gallery.id, resolvePath(projectId, folder), title);
+      const engine = input.engine ?? gallery.engine;
+      if (engine && engine !== project.engine) await updateDocument(projectId, target, { engine });
+      if (input.title?.trim() && !documentTitleOf((await textOf(projectId, target)) ?? "")) await updateDocument(projectId, target, { title: input.title });
+      return target;
+    }
+    // A fresh, self-contained document folder.
     const withSections = template === "article" || template === "ieee";
     const withBib = template !== "blank";
     if (withSections) await writeText(projectId, `${folder}/sections/introduction.tex`, "\\section{Introduction}\n\nStart writing here.\n");

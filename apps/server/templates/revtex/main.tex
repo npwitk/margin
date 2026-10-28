@@ -1,0 +1,32 @@
+% American Physical Society journals (Physical Review Letters, PRA–PRX…).
+% Change "prl" to "pra", "prb"… and "reprint" to "preprint" for a single column.
+\documentclass[aps,prl,reprint,superscriptaddress,amsmath,amssymb]{revtex4-2}
+
+\usepackage{graphicx}
+\usepackage{bm}
+\usepackage[hidelinks]{hyperref}
+
+\begin{document}
+
+\title{{{TITLE}}}
+
+\author{First Author}
+\email{first@example.com}
+\affiliation{Department of Physics, University One, City, Country}
+\author{Second Author}
+\affiliation{Department of Physics, University Two, City, Country}
+
+\date{\today}
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\maketitle
+
+\input{sections/introduction}
+\input{sections/method}
+
+\bibliography{references}
+
+\end{document}

@@ -1,0 +1,93 @@
+\documentclass[11pt,aspectratio=169]{beamer}
+
+% A clean, minimal look: white slides, big type, one accent colour.
+\usepackage[default]{sourcesanspro}
+\usepackage[T1]{fontenc}
+\usepackage{booktabs}
+
+\definecolor{ink}{HTML}{1D1D1F}
+\definecolor{muted}{HTML}{86868B}
+\definecolor{accent}{HTML}{0071E3}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamercolor{normal text}{fg=ink,bg=white}
+\setbeamercolor{structure}{fg=accent}
+\setbeamercolor{alerted text}{fg=accent}
+\setbeamercolor{frametitle}{fg=ink}
+\setbeamerfont{frametitle}{size=\LARGE,series=\bfseries}
+\setbeamertemplate{frametitle}{\vspace*{1.2em}\insertframetitle\par\vspace{0.2em}}
+\setbeamertemplate{itemize item}{\color{accent}\raisebox{0.15ex}{\scriptsize$\bullet$}}
+\setbeamertemplate{itemize subitem}{\color{muted}--}
+\setbeamersize{text margin left=2.4em,text margin right=2.4em}
+\setbeamertemplate{footline}{%
+  \hfill{\color{muted}\scriptsize\insertframenumber}\hspace{2.4em}\vspace{1.2em}}
+\setbeamertemplate{title page}{%
+  \vfill
+  {\color{accent}\small\bfseries\insertdate\par}\vspace{0.6em}
+  {\Huge\bfseries\color{ink}\inserttitle\par}\vspace{0.8em}
+  {\large\color{muted}\insertsubtitle\par}\vspace{2.2em}
+  {\normalsize\color{ink}\insertauthor\par}
+  {\small\color{muted}\insertinstitute\par}
+  \vfill}
+\setbeamertemplate{section page}{%
+  \vfill{\color{accent}\small\bfseries Part \insertsectionnumber\par}\vspace{0.4em}
+  {\Huge\bfseries\insertsection\par}\vfill}
+\AtBeginSection{\begin{frame}[plain]\sectionpage\end{frame}}
+
+\title{{{TITLE}}}
+\subtitle{What we did, and why it matters}
+\author{Your Name}
+\institute{University One}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+\section{Motivation}
+
+\begin{frame}{The problem}
+  \begin{itemize}
+    \item Who is affected, and what goes wrong today
+    \item Why existing approaches fall short
+    \item What we set out to do
+  \end{itemize}
+\end{frame}
+
+\section{Approach}
+
+\begin{frame}{Our idea}
+  We train on data that never leaves the device:
+  \[
+    \min_{w} \; \sum_{k=1}^{K} \frac{n_k}{n} F_k(w)
+  \]
+  \begin{itemize}
+    \item Clients send updates, not data
+    \item The server only sees the aggregate
+  \end{itemize}
+\end{frame}
+
+\section{Results}
+
+\begin{frame}{What we found}
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Method & Accuracy & Rounds \\
+    \midrule
+    Baseline & 81.2 & 500 \\
+    Ours & \textbf{85.3} & \textbf{180} \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+\begin{frame}[plain]
+  \centering\vfill
+  {\Huge\bfseries Thank you}\par\vspace{0.6em}
+  {\color{muted}first@example.com}
+  \vfill
+\end{frame}
+
+\end{document}

@@ -1,6 +1,6 @@
 import type {
   CheckpointFileDiff, PendingChanges,
-  DocumentInfo, OutlineEntry,
+  DocumentInfo, OutlineEntry, ConferenceEdition, ProjectVenue,
   CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
   AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
@@ -36,7 +36,8 @@ export const api = {
   logout: () => req("/logout", json("POST")),
 
   projects: () => req<Project[]>("/projects"),
-  createProject: (name: string, template: string) => req<Project>("/projects", json("POST", { name, template })),
+  createProject: (name: string, template: string, venue?: ProjectVenue) => req<Project>("/projects", json("POST", { name, template, venue })),
+  conferences: (q = "") => req<ConferenceEdition[]>(`/conferences${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   project: (id: string) => req<Project>(P(id)),
   importZip: (file: File) => {
     const form = new FormData();

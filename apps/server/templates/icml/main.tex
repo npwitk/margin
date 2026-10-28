@@ -1,0 +1,46 @@
+\documentclass{article}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+% The official ICML style. Use [accepted] for the camera-ready version.
+\usepackage{icml2025}
+
+\usepackage{amsmath,amssymb,mathtools,amsthm}
+
+\icmltitlerunning{{{TITLE}}}
+
+\begin{document}
+
+\twocolumn[
+\icmltitle{{{TITLE}}}
+
+\begin{icmlauthorlist}
+\icmlauthor{First Author}{one}
+\icmlauthor{Second Author}{two}
+\end{icmlauthorlist}
+
+\icmlaffiliation{one}{Department, University One, City, Country}
+\icmlaffiliation{two}{Department, University Two, City, Country}
+\icmlcorrespondingauthor{First Author}{first@example.com}
+\icmlkeywords{Machine Learning, ICML}
+
+\vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+\begin{abstract}
+One paragraph: the problem, what you did, what you found, and why it matters. Keep it to about 150 words and avoid citations here.
+\end{abstract}
+
+\input{sections/introduction}
+\input{sections/method}
+
+\bibliography{references}
+\bibliographystyle{icml2025}
+
+\end{document}

@@ -1,0 +1,60 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage[most]{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+
+% A reviewer's comment, in a grey box; your reply follows in plain text.
+\newtcolorbox{reviewer}[1]{colback=black!4,colframe=black!4,boxrule=0pt,arc=4pt,
+  left=10pt,right=10pt,top=6pt,bottom=6pt,title={\textbf{#1}},coltitle=black,
+  attach title to upper,after title={\quad}}
+% Text you changed in the paper, quoted in the reply.
+\newcommand{\change}[1]{\textcolor{blue!65!black}{#1}}
+
+\title{\textbf{Response to Reviewers}\\[0.4em] \large {{TITLE}}}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+We thank the reviewers for their careful reading and helpful comments. Below
+we reply to each point. Changes in the revised paper are shown
+\change{in blue}.
+
+\section*{Summary of changes}
+\begin{itemize}
+  \item Added a comparison with the baseline suggested by Reviewer~1 (Section~5).
+  \item Clarified the threat model (Section~2).
+  \item Fixed typos and updated the related work.
+\end{itemize}
+
+\section*{Reviewer 1}
+
+\begin{reviewer}{1.1}
+The evaluation should include a comparison with the strongest recent baseline.
+\end{reviewer}
+
+We agree and have added it. \change{Our method improves accuracy by 4.1 points
+over the baseline while using 64\% fewer communication rounds.}
+
+\begin{reviewer}{1.2}
+The threat model is not stated clearly.
+\end{reviewer}
+
+We now state it at the start of Section~2.
+
+\section*{Reviewer 2}
+
+\begin{reviewer}{2.1}
+Paste the reviewer's comment here.
+\end{reviewer}
+
+Write your reply here.
+
+\end{document}
