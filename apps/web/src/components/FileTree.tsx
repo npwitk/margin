@@ -99,15 +99,11 @@ interface Group { id: string; title: string; tag?: string; subtitle?: string; do
  * With sections (named folders: Paper, Slides, Notes…), the tree shows one
  * group per section with its folder's contents, then everything else.
  */
-function groupBySection(files: FileEntry[], sections: ProjectSection[], docs: DocumentInfo[], mainFile: string): Group[] {
+function groupBySection(files: FileEntry[], sections: ProjectSection[]): Group[] {
   const groups: Group[] = sections.map((s) => ({ id: `area:${s.path}`, title: s.title, subtitle: `${s.path}/`, area: s, files: [], root: s.path }));
   // The deepest section a path is in (sections can sit inside other sections' folders).
   const home = (p: string) => groups.filter((g) => p.startsWith(`${g.root}/`)).sort((a, b) => b.root!.length - a.root!.length)[0];
-  const main = docs.find((d) => d.path === mainFile);
-  const rest: Group = {
-    id: "rest", title: main && !home(main.path) ? main.title : "Other files",
-    subtitle: "Not in a section. Right-click a folder to make it a section.", files: [],
-  };
+  const rest: Group = { id: "rest", title: "Not in a section", subtitle: "Files outside every section. Right-click a folder to make it a section.", files: [] };
   for (const f of files) {
     if (groups.some((g) => g.root === f.path)) continue;
     (home(f.path) ?? rest).files.push(f);
@@ -164,8 +160,8 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
       : mode === "auto" ? (sections.length ? "sections" : documents.length > 1 ? "documents" : "folders") : "folders";
   const grouped = view !== "folders";
   const tree = useMemo(() => buildTree(files), [files]);
-  const groups = useMemo(() => (view === "sections" ? groupBySection(files, sections, documents, mainFile)
-    : view === "documents" ? groupByDocument(files, documents) : []).map((g) => ({ ...g, tree: buildTree(g.files, g.root) })), [view, files, documents, sections, mainFile]);
+  const groups = useMemo(() => (view === "sections" ? groupBySection(files, sections)
+    : view === "documents" ? groupByDocument(files, documents) : []).map((g) => ({ ...g, tree: buildTree(g.files, g.root) })), [view, files, documents, sections]);
   const [naming, setNaming] = useState(false);
   const [newName, setNewName] = useState("");
   useEffect(() => { if (startSection) { setNaming(true); setNewName(""); } }, [startSection]);

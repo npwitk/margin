@@ -5,10 +5,10 @@ import { conflictBlocks, type ConflictBlock } from "@margin/shared";
 /** Plain-language side names: "live edits (Alice, Bob)" → "Alice, Bob's version". */
 export function sideName(label: string, fallback: string) {
   const live = /^live edits(?: \((.+)\))?$/.exec(label);
-  if (live) return live[1] ? `${live[1]}'s version (live)` : "The live version";
+  if (live) return live[1] ? `${live[1]}'s version (live)` : "the live version";
   const pushed = /^pushed by (.+)$/.exec(label);
   if (pushed) return `${pushed[1]}'s version (pushed)`;
-  return label ? `${label}'s version` : fallback;
+  return label ? `${label}'s version` : fallback.toLowerCase();
 }
 
 function resolve(view: EditorView, block: ConflictBlock, keep: "ours" | "theirs" | "both") {

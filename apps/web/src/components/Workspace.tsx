@@ -754,7 +754,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           <span className="grow">
             {[...conflictsMap.values()].length === 1 ? "Two versions overlap in " : "Versions overlap in "}
             {[...conflictsMap.values()].map((c, i) => (
-              <span key={c.file}>{i ? ", " : ""}<button className="link" onClick={() => openFile(c.file)}>{c.file}</button> <span className="muted">({c.count} place{c.count === 1 ? "" : "s"}, from {c.by})</span></span>
+              <span key={c.file}>{i ? ", " : ""}<button className="link" onClick={() => openFile(c.file)}>{c.file}</button> <span className="muted">({c.count} place{c.count === 1 ? "" : "s"}; other version from {c.by.replace(/ \((.+)\)$/, ", $1")})</span></span>
             ))}
             . Open the file and pick which version to keep.
           </span>

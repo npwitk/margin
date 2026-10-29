@@ -139,7 +139,7 @@ env = { MARGIN_TOKEN = "${token}" }`}</pre>
               <div className="grow">
                 <div>Edit the files. Whenever you want to share your changes, or get your co-authors' latest, run this in that folder:</div>
                 <CodeLine text={`${cli} sync`} />
-                <span className="muted small">It tells you what it sent and what it got. <code>margin status</code> shows what you've changed and whether Margin has anything newer.</span>
+                <p className="muted small step-hint">It tells you what it sent and what it got. <code>margin status</code> shows what you've changed and whether Margin has anything newer.</p>
               </div>
             </div>
           </div>

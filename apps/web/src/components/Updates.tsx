@@ -122,7 +122,7 @@ function UpdateCard({ u, projectId, session, onOpenFile, onOpenHistory, onOpenBo
           </div>
         </div>
       </header>
-      <div className="md update-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(u.body) }} />
+      {u.body.trim() !== u.title && <div className="md update-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(u.body) }} />}
       {u.kind === "summary" && !!u.files?.length && (
         <div className="update-files">
           <button className="link small" onClick={() => setShowFiles((s) => !s)}>{u.files.length} file{u.files.length === 1 ? "" : "s"} changed</button>
