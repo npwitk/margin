@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Member, ProjectAccess, Session } from "@margin/shared";
+import type { Member, MemberRole, ProjectAccess, Session } from "@margin/shared";
 import { ACCESS_MODE, DATA_DIR } from "./config.ts";
 import { HttpError, projectDir } from "./storage.ts";
 
@@ -14,7 +14,7 @@ import { HttpError, projectDir } from "./storage.ts";
  * sign-ups) only members can, and new people join through invite links.
  */
 
-interface Stored { members: Member[]; invites: { id: string; hash: string; createdBy: string; createdAt: string; expiresAt: string }[] }
+interface Stored { members: Member[]; invites: { id: string; hash: string; createdBy: string; createdAt: string; expiresAt: string; role?: MemberRole }[] }
 
 const INVITE_DAYS = 14;
 const file = (projectId: string) => path.join(DATA_DIR, "access", `${path.basename(projectDir(projectId))}.json`);
@@ -49,6 +49,21 @@ export async function canAccess(projectId: string, s: Session): Promise<boolean>
   return a.members.some((m) => m.id === memberId(s));
 }
 
+/** Someone's role in a project. In workspace mode people who haven't been added count as editors. */
+export async function roleOf(projectId: string, s: Session): Promise<MemberRole | null> {
+  const role = (await load(projectId)).members.find((m) => m.id === memberId(s))?.role;
+  return role ?? (ACCESS_MODE === "workspace" ? "editor" : null);
+}
+
+export async function canEdit(projectId: string, s: Session) {
+  const role = await roleOf(projectId, s);
+  return role === "owner" || role === "editor";
+}
+
+export async function requireEdit(projectId: string, s: Session) {
+  if (!(await canEdit(projectId, s))) throw new HttpError(403, "Advisors can read and comment but not change files. Ask an owner to make you an editor (Share).");
+}
+
 export async function requireAccess(projectId: string, s: Session) {
   if (!(await canAccess(projectId, s))) throw new HttpError(404, "Project not found");
 }
@@ -74,11 +89,14 @@ async function requireOwner(a: Stored, s: Session) {
   if (a.members.find((m) => m.id === memberId(s))?.role !== "owner") throw new HttpError(400, "Only project owners can do that");
 }
 
-export async function createInvite(projectId: string, s: Session) {
+export async function createInvite(projectId: string, s: Session, role: MemberRole = "editor") {
   const a = await load(projectId);
   await requireOwner(a, s);
   const token = randomBytes(18).toString("base64url");
-  const invite = { id: randomBytes(5).toString("hex"), hash: sha(token), createdBy: s.name, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + INVITE_DAYS * 864e5).toISOString() };
+  const invite = {
+    id: randomBytes(5).toString("hex"), hash: sha(token), createdBy: s.name, createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + INVITE_DAYS * 864e5).toISOString(), ...(role === "advisor" ? { role } : {}),
+  };
   a.invites = [...a.invites.filter((i) => Date.parse(i.expiresAt) > Date.now()), invite];
   await store(projectId, a);
   return { id: invite.id, token, expiresAt: invite.expiresAt };
@@ -95,9 +113,9 @@ export async function joinWithInvite(projectId: string, s: Session, token: strin
   const a = await load(projectId);
   if (a.members.some((m) => m.id === memberId(s))) return;
   const h = Buffer.from(sha(token));
-  const ok = a.invites.some((i) => Date.parse(i.expiresAt) > Date.now() && timingSafeEqual(Buffer.from(i.hash), h));
-  if (!ok) throw new HttpError(404, "This invite link is invalid or has expired");
-  a.members.push(asMember(s, "editor"));
+  const invite = a.invites.find((i) => Date.parse(i.expiresAt) > Date.now() && timingSafeEqual(Buffer.from(i.hash), h));
+  if (!invite) throw new HttpError(404, "This invite link is invalid or has expired");
+  a.members.push(asMember(s, invite.role ?? "editor"));
   await store(projectId, a);
 }
 

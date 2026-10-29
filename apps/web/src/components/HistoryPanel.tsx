@@ -120,6 +120,7 @@ export function HistoryPanel({ projectId, onClose, beforeCheckpoint, onOpenFile,
                     <span className="version-title">
                       {v.kind === "named" && <Icon name="star" size={11} className="version-star" />}
                       {v.kind === "restore" && <Icon name="history" size={11} className="muted" />}
+                      {v.kind === "local" && <span title="Uploaded from a local copy (git push / margin sync)"><Icon name="upload" size={11} className="muted" /></span>}
                       <span className="ellipsis">{v.message}</span>
                     </span>
                     <span className="muted small ellipsis">{time(v.date)} · {(v.people ?? [v.author]).join(", ")}</span>
@@ -244,7 +245,7 @@ function Patch({ text }: { text: string }) {
 
 const baseName = (p: string) => p.replace(/ \(for .*\)$/, "");
 const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-const kindLabel = (k?: Checkpoint["kind"]) => (k === "named" ? "Named version" : k === "auto" ? "Saved automatically" : k === "restore" ? "Restore" : "Saved");
+const kindLabel = (k?: Checkpoint["kind"]) => (k === "named" ? "Named version" : k === "auto" ? "Saved automatically" : k === "restore" ? "Restore" : k === "local" ? "Uploaded from a local copy" : "Saved");
 function dayLabel(iso: string) {
   const d = new Date(iso), today = new Date();
   const y = new Date(); y.setDate(today.getDate() - 1);

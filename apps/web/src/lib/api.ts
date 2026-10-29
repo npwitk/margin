@@ -2,7 +2,7 @@ import type {
   CheckpointFileDiff, PendingChanges,
   DocumentInfo, OutlineEntry, ConferenceEdition, ProjectVenue,
   CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
-  AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
+  AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, MemberRole, Project, ProjectSection, ProjectUpdate, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
 export type StoredReview = Omit<PaperReview, "result"> & { status: "running" | "done" | "error"; error?: string; result?: PaperReview["result"] };
@@ -39,6 +39,7 @@ export const api = {
   createProject: (name: string, template: string, venue?: ProjectVenue) => req<Project>("/projects", json("POST", { name, template, venue })),
   conferences: (q = "") => req<ConferenceEdition[]>(`/conferences${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   project: (id: string) => req<Project>(P(id)),
+  revertAgent: (id: string, key: string) => req<{ files: string[] }>(`${P(id)}/agent/revert`, json("POST", { key })),
   importZip: (file: File) => {
     const form = new FormData();
     form.set("file", file);
@@ -46,7 +47,7 @@ export const api = {
   },
   importFrom: (body: { arxiv?: string; git?: string }) => req<Project & { imported: number }>("/projects/import", json("POST", body)),
   fromIdea: (body: { idea: string; goal?: string; template?: string; members?: string[] }) => req<Project>("/ai/from-idea", json("POST", body)),
-  updateProject: (id: string, patch: Partial<{ name: string; mainFile: string; engine: Engine; goal: string }>) =>
+  updateProject: (id: string, patch: Partial<{ name: string; mainFile: string; engine: Engine; goal: string; agentMode: AgentMode }>) =>
     req<Project>(P(id), json("PATCH", patch)),
 
   files: (id: string) => req<FileEntry[]>(`${P(id)}/files`),
@@ -76,6 +77,9 @@ export const api = {
   outline: (id: string, doc?: string) => req<{ doc: string; entries: OutlineEntry[] }>(`${P(id)}/outline${doc ? `?doc=${q(doc)}` : ""}`),
   createDocument: (id: string, body: { title?: string; template?: string; path?: string; layout?: "folder" | "beside"; copyFrom?: string }) =>
     req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("POST", body)),
+  createArea: (id: string, title: string, path?: string) => req<{ section: ProjectSection; project: Project }>(`${P(id)}/sections`, json("POST", { title, path })),
+  updateArea: (id: string, path: string, patch: { title?: string; index?: number }) => req<Project>(`${P(id)}/sections`, json("PATCH", { path, ...patch })),
+  removeArea: (id: string, path: string) => req<Project>(`${P(id)}/sections?path=${q(path)}`, { method: "DELETE" }),
   addSection: (id: string, doc: string, title: string) => req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents/section`, json("POST", { doc, title })),
   updateDocument: (id: string, body: { path: string; engine?: Engine; title?: string; makeDefault?: boolean; archived?: boolean }) =>
     req<{ project: Project; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("PATCH", body)),
@@ -123,8 +127,15 @@ export const api = {
   startReview: (id: string, skill: string, goal?: string, runner?: { deviceId: string; agentId: string }, doc?: string) =>
     req<StoredReview>(`${P(id)}/ai/reviews`, json("POST", { skill, goal, runner, doc })),
   cancelReview: (id: string, reviewId: string) => req(`${P(id)}/ai/reviews/${reviewId}/cancel`, json("POST")),
-  addThread: (id: string, body: { path: string; quote: string; kind: "comment" | "suggestion"; message?: string; replacement?: string }) =>
+  addThread: (id: string, body: { path: string; quote?: string; from?: number; to?: number; kind: "comment" | "suggestion"; message?: string; replacement?: string }) =>
     req<{ id: string }>(`${P(id)}/review`, json("POST", body)),
+  threadAction: (id: string, thread: string, body: { path: string; action: "reply" | "delete" | "open" | "resolved" | "rejected"; text?: string }) =>
+    req(`${P(id)}/review/${encodeURIComponent(thread)}`, json("POST", body)),
+  updates: (id: string) => req<ProjectUpdate[]>(`${P(id)}/updates`),
+  postUpdate: (id: string, body: string) => req<ProjectUpdate>(`${P(id)}/updates`, json("POST", { body })),
+  commentOnUpdate: (id: string, update: string, body: string) => req(`${P(id)}/updates/${update}/comments`, json("POST", { body })),
+  summarizeUpdates: (id: string) => req<{ update: ProjectUpdate | null }>(`${P(id)}/updates/summarize`, json("POST")),
+  tasksFromUpdate: (id: string, update: string) => req<{ tasks: { id: string; title: string }[] }>(`${P(id)}/updates/${update}/tasks`, json("POST")),
   citations: (id: string) => req<CitationReport>(`${P(id)}/citations`),
   addDoi: (id: string, doi: string) => req<{ key: string; file: string; bibtex: string }>(`${P(id)}/citations/doi`, json("POST", { doi })),
 
@@ -138,11 +149,11 @@ export const api = {
   insertFromLibrary: (id: string, refId: string) => req<{ key: string; file: string; added: boolean; note?: string }>(`${P(id)}/library/${refId}`, json("POST")),
 
   access: (id: string) => req<ProjectAccess>(`${P(id)}/access`),
-  createInvite: (id: string) => req<{ id: string; token: string; expiresAt: string }>(`${P(id)}/invites`, json("POST")),
+  createInvite: (id: string, role: "editor" | "advisor" = "editor") => req<{ id: string; token: string; expiresAt: string }>(`${P(id)}/invites`, json("POST", { role })),
   revokeInvite: (id: string, inviteId: string) => req(`${P(id)}/invites/${inviteId}`, { method: "DELETE" }),
   join: (id: string, token: string) => req<Project>(`${P(id)}/join`, json("POST", { token })),
   removeMember: (id: string, memberId: string) => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }),
-  setRole: (id: string, memberId: string, role: "owner" | "editor") => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, json("PATCH", { role })),
+  setRole: (id: string, memberId: string, role: MemberRole) => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, json("PATCH", { role })),
 
   workspace: () => req<WorkspaceInfo>("/workspace"),
   createWorkspaceInvite: (days: number, maxUses: number) => req<{ id: string; token: string; expiresAt: string; maxUses: number }>("/workspace/invites", json("POST", { days, maxUses })),

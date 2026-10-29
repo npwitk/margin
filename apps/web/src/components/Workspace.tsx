@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isTextPath, type OutlineEntry, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions } from "@margin/shared";
+import { isTextPath, type OutlineEntry, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions, type WorkspaceView } from "@margin/shared";
 import { DocumentSwitcher, NewDocumentDialog, type NewDocumentInput } from "./DocumentSwitcher.tsx";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
@@ -7,6 +7,7 @@ import { useThreads } from "../lib/review.ts";
 import { ReviewPanel, type Draft } from "./ReviewPanel.tsx";
 import { LocalDialog } from "./LocalDialog.tsx";
 import { ShareDialog } from "./ShareDialog.tsx";
+import { Updates } from "./Updates.tsx";
 import { MarkdownView } from "./MarkdownView.tsx";
 import { AiSettingsDialog } from "./AiSettingsDialog.tsx";
 import { AssistantPanel } from "./AssistantPanel.tsx";
@@ -51,6 +52,9 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [results, setResults] = useState<Record<string, CompileResult>>({});
   const [pdfVersions, setPdfVersions] = useState<Record<string, number>>({});
   const [newDocOpen, setNewDocOpen] = useState(false);
+  // The section a new document goes in (from a section's "+" menu), and the "New section" trigger.
+  const [newDocArea, setNewDocArea] = useState<string | undefined>();
+  const [sectionSignal, setSectionSignal] = useState(0);
   const [docMenuSignal, setDocMenuSignal] = useState(0);
   // Current values for async callbacks (compile queue, live events).
   const activeRef = useRef<string | null>(activeDoc);
@@ -81,7 +85,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [outlineTick, setOutlineTick] = useState(0);
   const [currentHeading, setCurrentHeading] = useState(-1);
   const cursor = useRef<{ file: string | null; line: number | null }>({ file: null, line: null });
-  const [view, setView] = useState<"write" | "board" | "review">(() => load(`view:${projectId}`, "write"));
+  const [view, setView] = useState<WorkspaceView>(() => load(`view:${projectId}`, "write"));
+  // Advisors read, comment and follow Updates; they don't type into files.
+  const [advisor, setAdvisor] = useState(false);
+  useEffect(() => { api.access(projectId).then((a) => setAdvisor(a.you?.role === "advisor")).catch(() => {}); }, [projectId]);
   const [previewTab, setPreviewTab] = useState<"pdf" | "assistant" | "citations">(() => load("previewTab", "pdf"));
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
@@ -99,6 +106,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   useEffect(() => save("previewTab", previewTab), [previewTab]);
   useEffect(() => { api.aiSettings().then(setAiSettings).catch(() => {}); }, []);
   const agentsMap = useYMap(collab?.agents);
+  const conflictsMap = useYMap(collab?.conflicts);
   // Agents (built-in Claude, or Claude Code / Codex via margin-mcp). Hide ones that went quiet.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(t); }, []);
@@ -106,6 +114,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     .filter((a) => now - a.at < 10 * 60_000)
     .map((a, i) => ({
       clientId: -1 - i, user: { name: `${a.agent ?? "Claude"} for ${a.for}`, color: "#d97757", agent: true }, file: a.file ?? null, line: undefined, view: "write" as const,
+      agentKey: a.chatId, status: a.status, edits: a.edits,
     })), [agentsMap, now]);
   // Switching files clears the draft and selection, unless we're jumping to a specific thread.
   const pendingThread = useRef<string | null>(null);
@@ -170,7 +179,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     const events = collab.events;
     const onEvent = (e: { keysChanged: Set<string>; transaction: { local: boolean } }) => {
       if (e.transaction.local) return;
-      if (e.keysChanged.has("filesVersion")) { void refreshFiles(); void refreshDocs(); setOutlineTick((n) => n + 1); }
+      if (e.keysChanged.has("filesVersion")) { void refreshFiles(); void refreshDocs(); setOutlineTick((n) => n + 1); api.project(projectId).then(setProject).catch(() => {}); }
       if (e.keysChanged.has("historyVersion")) setHistoryKey((k) => k + 1);
       const last = events.get("lastCompile") as { by: string; ok: boolean; doc?: string } | undefined;
       if (e.keysChanged.has("lastCompile") && last && last.by !== session.name) {
@@ -209,8 +218,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   // ── Initial load ─────────────────────────────────────────────────────────
   useEffect(() => {
-    Promise.all([api.project(projectId), api.files(projectId), refreshDocs()])
-      .then(([p, f, d]) => {
+    Promise.all([api.project(projectId), api.files(projectId), refreshDocs(), api.access(projectId).catch(() => null)])
+      .then(([p, f, d, access]) => {
         setProject(p);
         setFiles(f);
         const saved = load<string | null>(`doc:${projectId}`, null);
@@ -218,7 +227,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         activeRef.current = start;
         setActiveDocState(start);
         const last = load<string | null>(`open:${projectId}`, null);
-        const startView = load<"write" | "board" | "review">(`view:${projectId}`, "write");
+        // Advisors start on Updates the first time; everyone comes back to where they were.
+        const startView = load<WorkspaceView | null>(`view:${projectId}`, null) ?? (access?.you?.role === "advisor" ? "updates" : "write");
         openFile(last && f.some((x) => x.path === last && x.type === "file") ? last : p.mainFile);
         setView(startView);
         compile();
@@ -399,8 +409,43 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           break;
         }
         case "newDocument":
+          setNewDocArea(undefined);
           setNewDocOpen(true);
           break;
+        case "newDocIn":
+          setNewDocArea(path);
+          setNewDocOpen(true);
+          break;
+        case "makeArea": {
+          const title = await ask({ title: "Make it a section", label: `${path}/ shows as its own group in the file list. Its files stay where they are.`, initial: path.split("/").pop()!.replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase()), confirm: "Make section" });
+          if (!title) return;
+          setProject((await api.createArea(projectId, title, path)).project);
+          break;
+        }
+        case "renameArea": {
+          const current = project?.sections?.find((x) => x.path === path);
+          const title = await ask({ title: "Rename section", label: `The folder stays ${path}/.`, initial: current?.title, confirm: "Rename" });
+          if (!title) return;
+          setProject(await api.updateArea(projectId, path, { title }));
+          break;
+        }
+        case "unmakeArea":
+          setProject(await api.removeArea(projectId, path));
+          notify(`${path}/ is a plain folder again`);
+          break;
+        case "deleteArea": {
+          const n = files.filter((f) => f.type === "file" && f.path.startsWith(`${path}/`)).length;
+          const ok = await ask({ title: `Delete ${project?.sections?.find((x) => x.path === path)?.title ?? path}?`, label: `Deletes ${path}/ and its ${n} file${n === 1 ? "" : "s"}. They stay recoverable from History.`, confirm: "Delete", danger: true, confirmOnly: true });
+          if (ok === null) return;
+          await collab?.flush();
+          await api.remove(projectId, path);
+          collab?.closeUnder(path);
+          files.filter((f) => f.path.startsWith(`${path}/`)).forEach((f) => editor.current?.forget(f.path));
+          setOpenPath((p) => (p?.startsWith(`${path}/`) ? null : p));
+          setTextPath((p) => (p?.startsWith(`${path}/`) ? null : p));
+          await Promise.all([refreshFiles(), refreshDocs(), api.project(projectId).then(setProject)]);
+          break;
+        }
         case "archiveDoc":
         case "restoreDoc": {
           const archived = action === "archiveDoc";
@@ -478,6 +523,18 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const follow = (peer: Peer) => {
     if (peer.view === "board") setView("board");
     else if (peer.file) openFile(peer.file, peer.line);
+  };
+
+  const revertAgent = async (peer: Peer) => {
+    if (!peer.agentKey || !peer.edits?.length) return;
+    const n = peer.edits.length;
+    if (!confirm(`Put back the ${n} file${n === 1 ? "" : "s"} ${peer.user.name} changed (${peer.edits.join(", ")}) as they were before it started? Edits others made to them since are undone too; everything stays in History.`)) return;
+    try {
+      const r = await api.revertAgent(projectId, peer.agentKey);
+      notify(`Undid ${peer.user.name}'s changes to ${r.files.length} file${r.files.length === 1 ? "" : "s"}`);
+    } catch (err) {
+      notify((err as Error).message);
+    }
   };
 
   const peersByFile = useMemo(() => {
@@ -585,7 +642,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       { id: "newfile", label: "New file…", section: "Action", icon: "plus", run: () => void onTreeAction("newFile", "") },
       { id: "upload", label: "Upload files…", section: "Action", icon: "upload", run: () => void onTreeAction("upload", "") },
       { id: "share", label: "Share: members and invite links…", section: "Project", icon: "plus", run: () => setShareOpen(true) },
-      { id: "local", label: "Work locally (git clone, agents)…", section: "Project", icon: "terminal", run: () => setLocalOpen(true) },
+      { id: "local", label: "Work outside the browser (Claude Code, a local folder, git)…", section: "Project", icon: "terminal", run: () => setLocalOpen(true) },
       { id: "rename-project", label: "Rename project…", section: "Project", icon: "file", run: () => void renameProject() },
       { id: "projects", label: "Back to all projects", section: "Navigate", icon: "back", run: () => navigate({ name: "projects" }) },
     ];
@@ -649,9 +706,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           <button className={view === "write" ? "active" : ""} onClick={() => setView("write")}>Write</button>
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")} title={`Board (${MOD}⇧B)`}>Board</button>
           <button className={view === "review" ? "active" : ""} onClick={() => setView("review")} title="AI review">Review</button>
+          <button className={view === "updates" ? "active" : ""} onClick={() => setView("updates")} title="What changed, summarized for co-authors and advisors, and their notes">Updates</button>
         </div>
         <div className="toolbar-trailing">
-          <PresenceStrip peers={[...peers, ...agentPeers]} onFollow={follow} />
+          <PresenceStrip peers={[...peers, ...agentPeers]} onFollow={follow} onRevertAgent={revertAgent} />
           {result && (
             <button className={`status-pill ${errors ? "danger" : warnings ? "warn" : "ok"}`} onClick={() => setShowProblems((s) => !s)} title="Problems and log">
               {errors ? <><Icon name="alert" size={13} />{errors} error{errors > 1 ? "s" : ""}</> :
@@ -662,7 +720,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           <div className="tool-group">
             <button className="icon-btn" onClick={() => setPaletteOpen(true)} title={`Search and commands (${MOD}K)`}><Icon name="search" /></button>
             <button className="icon-btn" onClick={() => setHistoryOpen(true)} title="Version history"><Icon name="history" /></button>
-            <button className="icon-btn" onClick={() => setLocalOpen(true)} title="Work locally: git clone, Claude Code, Codex"><Icon name="terminal" /></button>
+            <button className="icon-btn" onClick={() => setLocalOpen(true)} title="Work outside the browser: Claude Code and other agents, a folder on your computer, git"><Icon name="terminal" /></button>
             <button className="icon-btn" onClick={() => setShareOpen(true)} title="Share: members and invite links"><Icon name="share" /></button>
           </div>
           <button className="btn primary compile-btn" onClick={compile} disabled={compiling} title={`Compile (${MOD}S)`}>
@@ -676,6 +734,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       {view === "board" && (
         <Board collab={collab} session={session} files={files} peers={peers} projectName={project.name} onOpenFile={(p) => openFile(p)} />
       )}
+      {view === "updates" && (
+        <Updates projectId={projectId} collab={collab} session={session} advisor={advisor} notify={notify}
+          onOpenFile={(p) => { setView("write"); openFile(p); }} onOpenHistory={() => setHistoryOpen(true)} onOpenBoard={() => setView("board")} />
+      )}
       {view === "review" && (
         <ReviewView project={project} settings={aiSettings} onProjectChange={setProject} onOpenSettings={() => setAiSettingsOpen(true)} docs={docs} activeDoc={currentDoc}
           onOpen={(p, line) => openFile(p, line)} notify={notify} />
@@ -685,6 +747,18 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       )}
       {project.setup?.status === "error" && (
         <div className="planning-banner error-banner">Planning didn't finish: {project.setup.error} The template is ready to use; you can also ask the Assistant to plan the outline.</div>
+      )}
+      {conflictsMap.size > 0 && view === "write" && (
+        <div className="planning-banner conflict-banner">
+          <Icon name="alert" size={14} />
+          <span className="grow">
+            {[...conflictsMap.values()].length === 1 ? "Two versions overlap in " : "Versions overlap in "}
+            {[...conflictsMap.values()].map((c, i) => (
+              <span key={c.file}>{i ? ", " : ""}<button className="link" onClick={() => openFile(c.file)}>{c.file}</button> <span className="muted">({c.count} place{c.count === 1 ? "" : "s"}; other version from {c.by.replace(/ \((.+)\)$/, ", $1")})</span></span>
+            ))}
+            . Open the file and pick which version to keep.
+          </span>
+        </div>
       )}
       <div className="body" hidden={view !== "write"}>
         {sidebar && (
@@ -696,6 +770,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               </div>
               {sideTab === "files" && (
                 <div className="side-actions">
+                  <button className="icon-btn" title="New section: a named part of the project (Slides, Notes…) to put documents in" onClick={() => setSectionSignal(Date.now())}><Icon name="grid" size={15} /></button>
                   <button className="icon-btn" title="New file" onClick={() => void onTreeAction("newFile", "")}><Icon name="plus" size={15} /></button>
                   <button className="icon-btn" title="New folder" onClick={() => void onTreeAction("newFolder", "")}><Icon name="folderPlus" size={15} /></button>
                   <button className="icon-btn" title="Upload files (or drop them anywhere in the list)" onClick={() => void onTreeAction("upload", "")}><Icon name="upload" size={15} /></button>
@@ -721,6 +796,18 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               onOpen={(p) => openFile(p)}
               onAction={(a, p) => void onTreeAction(a, p)}
               onDropFiles={(dir, list) => void uploadTo(dir, list)}
+              sections={project.sections}
+              startSection={sectionSignal}
+              onCreateSection={async (title) => {
+                try {
+                  const r = await api.createArea(projectId, title);
+                  setProject(r.project);
+                  await refreshFiles();
+                  setRevealPath({ path: r.section.path, key: Date.now() });
+                } catch (err) {
+                  notify((err as Error).message);
+                }
+              }}
             />
             )}
           </aside>
@@ -773,6 +860,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     onCompile={compile}
                     onForwardSync={(p, l) => void forwardSync(p, l)}
                     onError={notify}
+                    readOnly={advisor}
+                    onConflicts={(file, n) => { if (!n && collab?.conflicts.has(file)) collab.conflicts.delete(file); }}
                     citeOptions={citeOptions}
                     onLibraryCite={libraryCite}
                   />
@@ -788,6 +877,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
              </div>
               {reviewOpen && !binaryOpen && (
                 <ReviewPanel
+                  remote={advisor && textPath ? { projectId, path: textPath, onError: notify } : undefined}
                   doc={reviewDoc}
                   threads={threads}
                   session={session}
@@ -853,7 +943,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         onOpenFile={(p) => { setHistoryOpen(false); openFile(p); }}
         onRestored={(msg) => { notify(msg); void refreshFiles(); void refreshDocs(); compile(); }} />}
       {aiSettingsOpen && <AiSettingsDialog settings={aiSettings} onChange={setAiSettings} onClose={() => setAiSettingsOpen(false)} />}
-      {newDocOpen && <NewDocumentDialog docs={docs} defaultDir={(project.mainFile.includes("/") ? project.mainFile.slice(0, project.mainFile.lastIndexOf("/")) : ".")} onCreate={createDoc} onClose={() => setNewDocOpen(false)} />}
+      {newDocOpen && <NewDocumentDialog docs={docs} sections={project.sections} initialSection={newDocArea} defaultDir={(project.mainFile.includes("/") ? project.mainFile.slice(0, project.mainFile.lastIndexOf("/")) : ".")} onCreate={createDoc} onClose={() => setNewDocOpen(false)} />}
       {shareOpen && <ShareDialog projectId={projectId} session={session} onClose={() => setShareOpen(false)} />}
       {localOpen && <LocalDialog projectId={projectId} session={session} onClose={() => setLocalOpen(false)} />}
       {prompt && <PromptDialog req={prompt} onDone={() => setPrompt(null)} />}

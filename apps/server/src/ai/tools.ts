@@ -1,15 +1,25 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type * as Y from "yjs";
 import { z } from "zod";
-import { ROOM, TASK_COLUMNS, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
+import { ROOM, boardColumns, columnOf, firstColumn, type Engine, type TaskColumn, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
 import { emit, withDoc } from "../collab.ts";
-import { createDocument, listDocuments } from "../documents.ts";
+import { addSection, createDocument, listDocuments, updateDocument } from "../documents.ts";
 import { compileProject } from "../compile.ts";
+import { addEntry, movePath, removePath } from "../entries.ts";
+import { addProjectSection } from "../sections.ts";
+import { canEdit } from "../access.ts";
+import { commentOn, listUpdates, postNote } from "../updates.ts";
 import { getProject, listFiles, resolvePath } from "../storage.ts";
+import { editorName, recordEdit, saveVersion } from "../versions.ts";
+import { applyAgentChange } from "../connect/apply.ts";
+import { beforeEdit, type CursorRange } from "./activity.ts";
 import { textFiles, textOf } from "./paper.ts";
 
 /**
- * Tools the project assistant can use. It can read anything, but it changes
- * text only by leaving suggestions and comments that a person accepts.
+ * Tools the project assistant and external agents (MCP) can use. They read
+ * anything; how they change text depends on the project's agent mode: typed
+ * straight into the live document like a co-author ("edit"), or left as
+ * suggestions a person accepts ("suggest").
  */
 
 export interface ToolContext {
@@ -17,7 +27,9 @@ export interface ToolContext {
   session: Session;
   /** Who's acting: "Claude" for the built-in assistant, or an external agent's name. */
   agentName: string;
-  status(text: string, file?: string): void;
+  /** Identifies this agent's run, for its presence and for undoing its edits. */
+  key: string;
+  status(text: string, file?: string, range?: CursorRange): void;
 }
 
 export interface ToolOutcome {
@@ -43,6 +55,32 @@ function checkPath(projectId: string, rel: string) {
   if (!isTextPath(rel)) throw new Error(`${rel} isn't a text file`);
 }
 
+/** The session edits are credited to: "Claude Code (for Alice)". */
+const asAgent = (ctx: ToolContext): Session => (ctx.session.agent ? ctx.session : { ...ctx.session, agent: ctx.agentName });
+
+async function agentMode(ctx: ToolContext) {
+  return (await getProject(ctx.projectId)).agentMode ?? "suggest";
+}
+
+const SUGGEST_ONLY = "This project is set to \"Agents suggest\": file and folder changes need a person. Ask your user to make it, or to switch the project to \"Agents edit directly\" in Share settings.";
+
+function columnsIn(doc: Y.Doc) {
+  return boardColumns(doc.getMap<TaskColumn[]>("board").get("columns"));
+}
+
+/** A column by id or (case-insensitive) name. */
+function findColumn(columns: TaskColumn[], ref: string) {
+  const r = ref.trim().toLowerCase();
+  return columns.find((c) => c.id === ref) ?? columns.find((c) => c.label.toLowerCase() === r);
+}
+
+export function columnId(label: string, columns: TaskColumn[]) {
+  const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "column";
+  let id = base, n = 2;
+  while (columns.some((c) => c.id === id)) id = `${base}-${n++}`;
+  return id;
+}
+
 function occurrences(text: string, needle: string) {
   const out: number[] = [];
   for (let i = text.indexOf(needle); i >= 0 && out.length < 50; i = text.indexOf(needle, i + 1)) out.push(i);
@@ -56,7 +94,8 @@ const DEFS: Record<string, Def> = {
     async run(_input: Record<string, never>, ctx) {
       const [files, project, docs] = await Promise.all([listFiles(ctx.projectId), getProject(ctx.projectId), listDocuments(ctx.projectId)]);
       const roots = new Set(docs.map((d) => d.path));
-      const lines = files.map((f) => (f.type === "dir" ? `${f.path}/` : `${f.path} (${f.size} B)${f.path === project.mainFile ? " [default document]" : roots.has(f.path) ? " [document]" : ""}`));
+      const sections = new Map((project.sections ?? []).map((x) => [x.path, x.title]));
+      const lines = files.map((f) => (f.type === "dir" ? `${f.path}/${sections.has(f.path) ? ` [section “${sections.get(f.path)}”]` : ""}` : `${f.path} (${f.size} B)${f.path === project.mainFile ? " [default document]" : roots.has(f.path) ? " [document]" : ""}`));
       return { summary: "Listed project files", content: lines.join("\n") || "(empty project)" };
     },
   },
@@ -70,11 +109,12 @@ const DEFS: Record<string, Def> = {
     }),
     async run(input: { path: string; start_line?: number; end_line?: number }, ctx) {
       checkPath(ctx.projectId, input.path);
-      ctx.status(`Reading ${input.path}`, input.path);
       const text = await textOf(ctx.projectId, input.path);
       if (text === null) return fail(`Couldn't read ${input.path}`, `No such file: ${input.path}`);
       const lines = text.split("\n");
       const start = Math.max(1, input.start_line ?? 1);
+      const at = lines.slice(0, start - 1).reduce((n, l) => n + l.length + 1, 0);
+      ctx.status(`Reading ${input.path}`, input.path, { from: at, to: at });
       const end = Math.min(lines.length, input.end_line ?? start + READ_LIMIT - 1, start + READ_LIMIT - 1);
       const body = lines.slice(start - 1, end).map((l, i) => `${String(start + i).padStart(5)}  ${l}`).join("\n");
       const more = end < lines.length ? `\n… ${lines.length - end} more lines (read with start_line=${end + 1})` : "";
@@ -136,6 +176,162 @@ const DEFS: Record<string, Def> = {
           : `The \`find\` text appears ${result.hits} times. Include more surrounding text so it matches once.`);
       }
       return { summary: `Suggested an edit in ${input.path}`, path: input.path, threadId: result.id, content: `Suggestion created (id ${result.id}). The authors will review it.` };
+    },
+  },
+
+  edit_file: {
+    description:
+      "Change an exact passage of a file: replace `find` with `replace`. In projects where agents edit directly (the usual setting) the change is typed into the live document at once, " +
+      "so co-authors watch it happen and history credits you; otherwise it becomes a suggestion for the authors to accept. " +
+      "`find` must match the current file text exactly (copy it from read_file without line numbers) and appear only once - include more surrounding text if needed. " +
+      "To insert, use a nearby passage as `find` and repeat it in `replace` with the new text added. Keep each call to one focused change.",
+    schema: z.object({
+      path: z.string(),
+      find: z.string().describe("Exact existing text to replace"),
+      replace: z.string().describe("Replacement text"),
+      reason: z.string().describe("One sentence saying what the change does (shown to the authors)"),
+    }),
+    async run(input: { path: string; find: string; replace: string; reason: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return DEFS.propose_edit.run(input as never, ctx);
+      checkPath(ctx.projectId, input.path);
+      if (!input.find) return fail("No edit made", "`find` is empty.");
+      if (input.find === input.replace) return fail("No edit made", "`replace` is identical to `find`.");
+      await beforeEdit(ctx.projectId, ctx.key, input.path, asAgent(ctx));
+      const result = await withDoc(ctx.projectId, input.path, asAgent(ctx), (doc) => {
+        const text = yText(doc);
+        const current = text.toString();
+        const hits = occurrences(current, input.find);
+        if (hits.length !== 1) return { hits: hits.length };
+        doc.transact(() => {
+          text.delete(hits[0], input.find.length);
+          if (input.replace) text.insert(hits[0], input.replace);
+        });
+        return { hits: 1, from: hits[0], line: lineAt(current, hits[0]) };
+      });
+      if (result.from === undefined) {
+        return fail(`Couldn't edit ${input.path}`, result.hits === 0
+          ? "The `find` text isn't in the file (it may have changed). Read the file again and copy the passage exactly."
+          : `The \`find\` text appears ${result.hits} times. Include more surrounding text so it matches once.`);
+      }
+      ctx.status(`Edited ${input.path}: ${input.reason.trim()}`, input.path, { from: result.from, to: result.from + input.replace.length, edited: true });
+      return { summary: `Edited ${input.path}:${result.line}`, path: input.path, content: `Done: ${input.path} changed at line ${result.line}. Co-authors see it now.` };
+    },
+  },
+
+  write_file: {
+    description:
+      "Create a text file (.tex, .bib, .sty, notes…) with the given content, or replace a whole existing file. For small changes to an existing file use edit_file instead. " +
+      "Replacing merges with anything co-authors typed since `based_on` (the text you read), so pass it when you rewrite a file you read earlier. " +
+      "When agents only suggest in this project, a replacement becomes suggestions; new files are created either way.",
+    schema: z.object({
+      path: z.string().describe("Project-relative path, e.g. sections/limitations.tex"),
+      content: z.string(),
+      based_on: z.string().optional().describe("The file's text as you read it, if you're replacing a file"),
+    }),
+    async run(input: { path: string; content: string; based_on?: string }, ctx) {
+      checkPath(ctx.projectId, input.path);
+      const mode = await agentMode(ctx);
+      const exists = (await textOf(ctx.projectId, input.path)) !== null;
+      if (mode === "edit" || !exists) await beforeEdit(ctx.projectId, ctx.key, input.path, asAgent(ctx));
+      ctx.status(`${exists ? "Rewriting" : "Creating"} ${input.path}`, input.path);
+      const r = await applyAgentChange(ctx.projectId, asAgent(ctx), input.path, input.based_on ?? null, input.content, mode);
+      if (r.mode === "created") {
+        recordEdit(ctx.projectId, input.path, editorName(asAgent(ctx)));
+        return { summary: `Created ${input.path}`, path: input.path, content: `Created ${input.path}.` };
+      }
+      const conflicts = r.conflicts ? ` ${r.conflicts} passage${r.conflicts === 1 ? "" : "s"} clashed with co-authors' edits and now hold both versions between <<<<<<< and >>>>>>> markers; read the file and resolve them.` : "";
+      if (r.mode === "suggest") return { summary: `Suggested ${r.suggestions ?? 0} edit${r.suggestions === 1 ? "" : "s"} to ${input.path}`, path: input.path, content: `Left ${r.suggestions ?? 0} suggestions for the authors.${conflicts}` };
+      return { summary: `Rewrote ${input.path}`, path: input.path, content: `Replaced ${input.path}.${conflicts}` };
+    },
+  },
+
+  create_folder: {
+    description: "Create a folder (e.g. figures/ or a folder for a new document). Does nothing if it already exists.",
+    schema: z.object({ path: z.string() }),
+    async run(input: { path: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Folder not created", SUGGEST_ONLY);
+      ctx.status(`Creating folder ${input.path}`);
+      const { existed } = await addEntry(ctx.projectId, input.path.replace(/\/+$/, ""), "dir", asAgent(ctx));
+      return { summary: existed ? `${input.path} already exists` : `Created folder ${input.path}`, content: existed ? "That folder already exists." : "Folder created." };
+    },
+  },
+
+  move_path: {
+    description: "Rename or move a file or folder. LaTeX \\input paths aren't rewritten: update them with edit_file afterwards.",
+    schema: z.object({ from: z.string(), to: z.string() }),
+    async run(input: { from: string; to: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Not moved", SUGGEST_ONLY);
+      await beforeEdit(ctx.projectId, ctx.key, input.from, asAgent(ctx));
+      ctx.status(`Moving ${input.from} to ${input.to}`);
+      await movePath(ctx.projectId, input.from, input.to, asAgent(ctx));
+      return { summary: `Moved ${input.from} to ${input.to}`, path: input.to, content: "Moved. Check \\input/\\include/\\includegraphics paths that pointed to the old location." };
+    },
+  },
+
+  delete_path: {
+    description: "Delete a file or folder. Only when the user asked for it; it stays in version history.",
+    schema: z.object({ path: z.string() }),
+    async run(input: { path: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Not deleted", SUGGEST_ONLY);
+      await beforeEdit(ctx.projectId, ctx.key, input.path, asAgent(ctx));
+      ctx.status(`Deleting ${input.path}`);
+      await removePath(ctx.projectId, input.path, asAgent(ctx));
+      return { summary: `Deleted ${input.path}`, content: "Deleted (recoverable from history)." };
+    },
+  },
+
+  add_section: {
+    description: "Add a section file to a LaTeX document: creates sections/<name>.tex next to it and \\input's it before the bibliography. Then write its text with edit_file.",
+    schema: z.object({ title: z.string().describe("Section name, e.g. \"Limitations\""), document: z.string().optional().describe("Document path; default: the default document") }),
+    async run(input: { title: string; document?: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Section not added", SUGGEST_ONLY);
+      const docPath = input.document ?? (await getProject(ctx.projectId)).mainFile;
+      await beforeEdit(ctx.projectId, ctx.key, docPath, asAgent(ctx));
+      ctx.status(`Adding section “${input.title}”`, docPath);
+      const file = await addSection(ctx.projectId, docPath, input.title, asAgent(ctx));
+      await beforeEdit(ctx.projectId, ctx.key, file, asAgent(ctx));
+      recordEdit(ctx.projectId, file, editorName(asAgent(ctx)));
+      emit(ctx.projectId, "filesVersion", Date.now());
+      return { summary: `Added section ${file}`, path: file, content: `Created ${file} and \\input it from ${docPath}.` };
+    },
+  },
+
+  create_project_section: {
+    description: "Create a section of the project: a named folder (e.g. \"Slides\", \"Experiments\", \"Meeting notes\") shown as its own group in everyone's file list, to put new documents and files in. This is not a LaTeX \\section (use add_section for that). Pass `path` to give an existing folder a section name instead.",
+    schema: z.object({ title: z.string(), path: z.string().optional().describe("An existing folder to turn into a section") }),
+    async run(input: { title: string; path?: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Section not created", SUGGEST_ONLY);
+      ctx.status(`Creating section “${input.title}”`);
+      const section = await addProjectSection(ctx.projectId, input, asAgent(ctx));
+      return { summary: `Created section “${section.title}”`, path: section.path, content: `Section “${section.title}” is the folder ${section.path}/. Put files there, e.g. create_document with path "${section.path}/<name>.tex".` };
+    },
+  },
+
+  update_document: {
+    description: "Change a document's settings: rename it in Margin, make it the default, archive or restore it, or set its engine.",
+    schema: z.object({
+      path: z.string(),
+      title: z.string().optional(),
+      make_default: z.boolean().optional(),
+      archived: z.boolean().optional(),
+      engine: z.enum(["pdflatex", "xelatex", "lualatex"]).optional(),
+    }),
+    async run(input: { path: string; title?: string; make_default?: boolean; archived?: boolean; engine?: Engine }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Document unchanged", SUGGEST_ONLY);
+      ctx.status(`Updating ${input.path}`, input.path);
+      await updateDocument(ctx.projectId, input.path, { title: input.title, makeDefault: input.make_default, archived: input.archived, engine: input.engine });
+      emit(ctx.projectId, "filesVersion", Date.now());
+      return { summary: `Updated ${input.path}`, path: input.path, content: "Document updated." };
+    },
+  },
+
+  save_version: {
+    description: "Save a named version of the project (a checkpoint in its history), e.g. after finishing a piece of work. The message says what changed, for co-authors and advisors.",
+    schema: z.object({ message: z.string().describe("Short summary, e.g. \"Rewrote related work around retrieval methods\"") }),
+    async run(input: { message: string }, ctx) {
+      ctx.status("Saving a version");
+      const cp = await saveVersion(ctx.projectId, { message: input.message.slice(0, 200), by: editorName(asAgent(ctx)), kind: "named" });
+      return { summary: cp ? `Saved version “${input.message}”` : "Nothing new to save", content: cp ? `Saved version ${cp.hash.slice(0, 8)}.` : "No changes since the last version." };
     },
   },
 
@@ -205,67 +401,132 @@ const DEFS: Record<string, Def> = {
   },
 
   list_tasks: {
-    description: "Show the project board: tasks, their status, assignee and linked files.",
+    description: "Show the project board: its columns, and the tasks in each with status, assignees and linked files.",
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
-      const tasks = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => [...doc.getMap<Task>("tasks").values()]);
-      const content = TASK_COLUMNS.map((c) => {
-        const items = tasks.filter((t) => t.status === c.id).sort((a, b) => a.order - b.order);
-        return `${c.label}:\n${items.map((t) => `- [${t.id.slice(0, 8)}] ${t.title}${assigneesOf(t).length ? ` (${assigneesOf(t).map((a) => `@${a}`).join(", ")})` : ""}${t.files?.length ? ` files: ${t.files.join(", ")}` : ""}`).join("\n") || "- (none)"}`;
+      const { tasks, columns } = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => ({ tasks: [...doc.getMap<Task>("tasks").values()], columns: columnsIn(doc) }));
+      const content = columns.map((c) => {
+        const items = tasks.filter((t) => columnOf(columns, t.status).id === c.id).sort((a, b) => a.order - b.order);
+        return `${c.label} [status "${c.id}", ${c.kind === "active" ? "in progress" : c.kind === "done" ? "finished" : "not started"}]:\n${items.map((t) => `- [${t.id.slice(0, 8)}] ${t.title}${assigneesOf(t).length ? ` (${assigneesOf(t).map((a) => `@${a}`).join(", ")})` : ""}${t.files?.length ? ` files: ${t.files.join(", ")}` : ""}`).join("\n") || "- (none)"}`;
       }).join("\n\n");
       return { summary: "Checked the board", content };
     },
   },
 
   create_task: {
-    description: "Add a task to the project board's To do column (e.g. follow-ups you can't do yourself, like running an experiment).",
+    description: "Add a task to the project board (its first not-started column unless you name one), e.g. follow-ups you can't do yourself, like running an experiment.",
     schema: z.object({
       title: z.string(),
       assignee: z.string().optional().describe("Member name, if the user asked to assign it"),
       files: z.array(z.string()).optional(),
       notes: z.string().optional(),
+      status: z.string().optional().describe("Column id or name from list_tasks"),
     }),
-    async run(input: { title: string; assignee?: string; files?: string[]; notes?: string }, ctx) {
-      const task = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
+    async run(input: { title: string; assignee?: string; files?: string[]; notes?: string; status?: string }, ctx) {
+      const result = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
         const tasks = doc.getMap<Task>("tasks");
-        const order = Math.max(0, ...[...tasks.values()].filter((t) => t.status === "todo").map((t) => t.order)) + 1;
+        const columns = columnsIn(doc);
+        const column = input.status ? findColumn(columns, input.status) : firstColumn(columns);
+        if (!column) return { error: `No column “${input.status}”. Columns: ${columns.map((c) => c.label).join(", ")}.` };
+        const order = Math.max(0, ...[...tasks.values()].filter((t) => t.status === column.id).map((t) => t.order)) + 1;
+        const number = Math.max(0, ...[...tasks.values()].map((t) => t.number ?? 0)) + 1;
         const now = new Date().toISOString();
         const t: Task = {
-          id: crypto.randomUUID(), title: input.title.slice(0, 200), status: "todo", order,
+          id: crypto.randomUUID(), title: input.title.slice(0, 200), status: column.id, order, number,
           ...(input.assignee ? withAssignees([input.assignee]) : {}), files: input.files?.filter((f) => isTextPath(f) || f.includes(".")), notes: input.notes,
           createdBy: `${ctx.agentName} (for ${ctx.session.name})`, createdAt: now, updatedAt: now,
         };
         tasks.set(t.id, t);
-        return t;
+        return { task: t, column };
       });
-      return { summary: `Added task “${task.title}”`, content: `Task created (id ${task.id.slice(0, 8)}).` };
+      if (!result.task) return fail("Couldn't add the task", result.error!);
+      return { summary: `Added task “${result.task.title}” to ${result.column.label}`, content: `Task created (id ${result.task.id.slice(0, 8)}).` };
     },
   },
 
   update_task: {
-    description: "Update a board task: claim it (assign it and move it to In progress), move it between columns, or add a note. Use the id shown by list_tasks (a prefix is enough).",
+    description: "Update a board task: claim it (assign it and move it to an in-progress column), move it between columns, or add a note. Use the id shown by list_tasks (a prefix is enough).",
     schema: z.object({
       id: z.string(),
-      status: z.enum(["todo", "doing", "review", "done"]).optional(),
+      status: z.string().optional().describe("Column id or name from list_tasks, e.g. \"doing\" or \"In progress\""),
       assignee: z.string().optional().describe("Member name to add as an assignee; use your user's name to claim it"),
       note: z.string().optional().describe("Appended to the task's notes"),
     }),
-    async run(input: { id: string; status?: Task["status"]; assignee?: string; note?: string }, ctx) {
+    async run(input: { id: string; status?: string; assignee?: string; note?: string }, ctx) {
       const result = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
         const tasks = doc.getMap<Task>("tasks");
+        const columns = columnsIn(doc);
         const matches = [...tasks.values()].filter((t) => t.id.startsWith(input.id));
         if (matches.length !== 1) return { error: matches.length ? "That id matches several tasks; use more characters." : "No task with that id." };
+        const column = input.status ? findColumn(columns, input.status) : undefined;
+        if (input.status && !column) return { error: `No column “${input.status}”. Columns: ${columns.map((c) => `${c.label} (${c.id})`).join(", ")}.` };
         const t = matches[0];
         const stamp = new Date().toISOString();
         const notes = input.note ? `${t.notes ? `${t.notes}\n\n` : ""}${input.note.trim()} (${ctx.agentName} for ${ctx.session.name}, ${stamp.slice(0, 10)})` : t.notes;
         const people = assigneesOf(t);
-        const next: Task = { ...t, status: input.status ?? t.status, ...(input.assignee && !people.includes(input.assignee) ? withAssignees([...people, input.assignee]) : {}), notes, updatedAt: stamp };
+        const next: Task = { ...t, status: column?.id ?? t.status, ...(input.assignee && !people.includes(input.assignee) ? withAssignees([...people, input.assignee]) : {}), notes, updatedAt: stamp };
         tasks.set(t.id, next);
-        return { task: next };
+        return { task: next, label: columnOf(columns, next.status).label };
       });
       if (!result.task) return fail("Couldn't update the task", result.error!);
-      const col = TASK_COLUMNS.find((c) => c.id === result.task.status)?.label;
-      return { summary: `Updated task “${result.task.title}” (${col}${assigneesOf(result.task).length ? `, ${assigneesOf(result.task).map((a) => `@${a}`).join(" ")}` : ""})`, content: "Task updated." };
+      return { summary: `Updated task “${result.task.title}” (${result.label}${assigneesOf(result.task).length ? `, ${assigneesOf(result.task).map((a) => `@${a}`).join(" ")}` : ""})`, content: "Task updated." };
+    },
+  },
+
+  list_updates: {
+    description: "Read the project's Updates feed, newest first: Claude's summaries of what changed in each batch of versions, and notes people (often the advisor) posted, with their comments. Check it for feedback like \"that experiment didn't work, try X\".",
+    schema: z.object({ limit: z.number().int().optional().describe("How many (default 8)") }),
+    async run(input: { limit?: number }, ctx) {
+      ctx.status("Reading the updates");
+      const list = (await listUpdates(ctx.projectId)).slice(0, Math.min(30, input.limit ?? 8));
+      const content = list.map((u) => [
+        `[${u.id.slice(0, 8)}] ${u.kind === "note" ? "Note" : "Summary"} by ${u.author}, ${u.at.slice(0, 16).replace("T", " ")}: ${u.title}`,
+        u.body,
+        ...(u.comments ?? []).map((c) => `  ${c.author}: ${c.body}`),
+      ].join("\n")).join("\n\n");
+      return { summary: `Read ${list.length} update${list.length === 1 ? "" : "s"}`, content: content || "No updates yet." };
+    },
+  },
+
+  post_update: {
+    description: "Post a note to the Updates feed for co-authors and the advisor, e.g. a short report at the end of a work session: what you did, what's left, questions. Markdown. Use reply_to (an update id) to comment on an existing update instead.",
+    schema: z.object({ title: z.string().optional(), body: z.string(), reply_to: z.string().optional() }),
+    async run(input: { title?: string; body: string; reply_to?: string }, ctx) {
+      ctx.status("Posting an update");
+      if (input.reply_to) {
+        const match = (await listUpdates(ctx.projectId)).filter((u) => u.id.startsWith(input.reply_to!));
+        if (match.length !== 1) return fail("Couldn't comment", match.length ? "That id matches several updates." : "No update with that id.");
+        await commentOn(ctx.projectId, asAgent(ctx), match[0].id, input.body);
+        return { summary: `Commented on “${match[0].title}”`, content: "Comment posted." };
+      }
+      const u = await postNote(ctx.projectId, asAgent(ctx), input);
+      return { summary: `Posted “${u.title}”`, content: `Posted (id ${u.id.slice(0, 8)}).` };
+    },
+  },
+
+  add_board_column: {
+    description: "Add a column to the project board, e.g. \"Blocked\" or \"Waiting for advisor\". Only when the user asks for it.",
+    schema: z.object({
+      label: z.string(),
+      kind: z.enum(["todo", "active", "done"]).optional().describe("not started, in progress (default) or finished"),
+      after: z.string().optional().describe("Put it after this column (id or name); default: before the finished columns"),
+    }),
+    async run(input: { label: string; kind?: TaskColumn["kind"]; after?: string }, ctx) {
+      const label = input.label.trim().slice(0, 40);
+      if (!label) return fail("No column added", "Give the column a name.");
+      const columns = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
+        const current = columnsIn(doc);
+        if (findColumn(current, label)) return null;
+        const column: TaskColumn = { id: columnId(label, current), label, kind: input.kind ?? "active" };
+        const after = input.after ? current.findIndex((c) => c === findColumn(current, input.after!)) : -1;
+        const doneAt = current.findIndex((c) => c.kind === "done");
+        const at = after >= 0 ? after + 1 : doneAt >= 0 ? doneAt : current.length;
+        const next = [...current.slice(0, at), column, ...current.slice(at)];
+        doc.getMap<TaskColumn[]>("board").set("columns", next);
+        return next;
+      });
+      if (!columns) return fail("No column added", `There's already a column called “${label}”.`);
+      return { summary: `Added board column “${label}”`, content: `Columns now: ${columns.map((c) => c.label).join(" → ")}.` };
     },
   },
 
@@ -341,9 +602,18 @@ export function toolDefinitions(): Anthropic.Beta.BetaToolUnion[] {
   return [...custom, { type: "web_search_20260209", name: "web_search", max_uses: 5 }];
 }
 
+/** What an advisor's agent (or Claude, asked by an advisor) may do: read, comment, suggest, use the board and updates. */
+const ADVISOR_TOOLS = new Set([
+  "list_files", "read_file", "search", "list_documents", "compile", "propose_edit", "add_comment", "list_comments", "reply_to_comment",
+  "list_tasks", "create_task", "update_task", "list_updates", "post_update",
+]);
+
 export async function runTool(name: string, input: unknown, ctx: ToolContext): Promise<ToolOutcome> {
   const def = DEFS[name];
   if (!def) return fail(`Unknown tool ${name}`, `Unknown tool: ${name}`);
+  if (!ADVISOR_TOOLS.has(name) && !(await canEdit(ctx.projectId, ctx.session))) {
+    return fail(`${name} isn't available`, `${ctx.session.name} is an advisor on this project: you can read, comment, suggest edits (propose_edit) and use the board, but not change files.`);
+  }
   // With eager input streaming the API doesn't validate inputs, and a
   // tolerant parse can hand us a truncated object; validate before running.
   const parsed = def.schema.safeParse(input);

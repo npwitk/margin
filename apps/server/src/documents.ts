@@ -310,12 +310,12 @@ ${bib}
   }
 }
 
-const slug = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "document";
+export const slug = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "document";
 
 const COPY_SKIP = /(^|\/)(_out|reviews|svg-inkscape)(\/|$)/;
 
-async function unusedFolder(projectId: string, base: string) {
-  const taken = new Set((await listFiles(projectId)).map((f) => f.path.split("/")[0]));
+export async function unusedFolder(projectId: string, base: string) {
+  const taken = new Set((await listFiles(projectId)).map((f) => f.path));
   let name = base, n = 2;
   while (taken.has(name)) name = `${base}-${n++}`;
   return name;

@@ -7,11 +7,11 @@ import { Hocuspocus, type Document } from "@hocuspocus/server";
 import { parseSigned } from "hono/utils/cookie";
 import { WebSocketServer } from "ws";
 import * as Y from "yjs";
-import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type RoomEvents, type Session, type Task, type TaskComment } from "@margin/shared";
+import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type FileConflict, type RoomEvents, type Session, type Task, type TaskColumn, type TaskComment } from "@margin/shared";
 import { editorName, recordEdit } from "./versions.ts";
 import { DATA_DIR, SECRET } from "./config.ts";
 import { HttpError, projectDir, resolvePath } from "./storage.ts";
-import { canAccess } from "./access.ts";
+import { canAccess, canEdit } from "./access.ts";
 import { handleBridge, handleUi } from "./connect/relay.ts";
 import { verifyToken } from "./tokens.ts";
 import { isActiveMember } from "./workspace.ts";
@@ -91,10 +91,15 @@ const paused = new Set<string>();
 
 async function persist(name: string, doc: Y.Doc, { withState = true } = {}) {
   const t = target(name);
-  if (paused.has(t.projectId)) return;
+  // While git rewrites the working tree, leave files alone; the CRDT cache lives outside it, so keep that.
+  if (paused.has(t.projectId)) {
+    if (withState) await writeAtomic(ystatePath(name), Y.encodeStateAsUpdate(doc));
+    return;
+  }
   if (t.room) {
     const comments = [...doc.getMap<TaskComment>("taskComments").values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const json = JSON.stringify({ tasks: boardFromDoc(doc), ...(comments.length ? { comments } : {}) }, null, 2) + "\n";
+    const columns = doc.getMap<TaskColumn[]>("board").get("columns");
+    const json = JSON.stringify({ ...(columns?.length ? { columns } : {}), tasks: boardFromDoc(doc), ...(comments.length ? { comments } : {}) }, null, 2) + "\n";
     if ((await readFile(t.file, "utf8").catch(() => "")) !== json) await writeAtomic(t.file, json);
   } else {
     // Renamed/deleted while open: don't resurrect it.
@@ -126,13 +131,15 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
   maxDebounce: 8000,
   timeout: 30_000,
 
-  async onAuthenticate({ requestHeaders, documentName }) {
+  async onAuthenticate({ requestHeaders, documentName, connectionConfig }) {
     const session = await sessionFromHeaders(requestHeaders);
     if (!session) throw new Error("unauthorized");
     const t = target(documentName);
     if (!(await exists(path.join(projectDir(t.projectId), ".margin", "project.json")))) throw new Error("no such project");
     if (!t.room && !(await isFile(t.file))) throw new Error("no such file");
     if (!(await isActiveMember(session)) || !(await canAccess(t.projectId, session))) throw new Error("no such project");
+    // Advisors watch files live but don't type into them (comments go through the API). The board stays open to them.
+    if (!t.room && !(await canEdit(t.projectId, session))) connectionConfig.readOnly = true;
     return { session };
   },
 
@@ -144,11 +151,12 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
     if (t.room) {
       const tasks = document.getMap<Task>("tasks");
       if (!state && tasks.size === 0) {
-        const board = await readFile(t.file, "utf8").then((s) => JSON.parse(s) as { tasks: Task[]; comments?: TaskComment[] }).catch(() => null);
+        const board = await readFile(t.file, "utf8").then((s) => JSON.parse(s) as { tasks: Task[]; comments?: TaskComment[]; columns?: TaskColumn[] }).catch(() => null);
         const comments = document.getMap<TaskComment>("taskComments");
         document.transact(() => {
           board?.tasks?.forEach((task) => tasks.set(task.id, task));
           board?.comments?.forEach((c) => comments.set(c.id, c));
+          if (board?.columns?.length) document.getMap<TaskColumn[]>("board").set("columns", board.columns);
         });
       }
     } else {
@@ -293,6 +301,13 @@ export function setAgentActivity(projectId: string, chatId: string, activity: Ag
     const agents = room.getMap<AgentActivity>("agents");
     if (activity) agents.set(chatId, activity);
     else agents.delete(chatId);
+  });
+}
+
+/** Two versions of a file overlapped and both are in it now, between conflict markers: tell everyone. */
+export async function noteConflict(projectId: string, file: string, count: number, by: string) {
+  await withDoc(projectId, ROOM, { name: by }, (doc) => {
+    doc.getMap<FileConflict>("conflicts").set(file, { file, count, by, at: Date.now() });
   });
 }
 

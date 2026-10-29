@@ -1,7 +1,7 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createThread, isTextPath, textHunks, textOf, type ApplyMode, type Session } from "@margin/shared";
-import { emit, liveText, releasePath, withDoc } from "../collab.ts";
+import { emit, liveText, noteConflict, releasePath, withDoc } from "../collab.ts";
 import { merge3 } from "../pushMerge.ts";
 import { deleteEntry, listFiles, resolvePath } from "../storage.ts";
 
@@ -47,7 +47,8 @@ export async function applyAgentChange(
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const live = (await current(projectId, rel)) ?? "";
-    const merged = base === null || base === live ? { text: content, conflicts: 0 } : await merge3(content, base, live);
+    const merged = base === null || base === live ? { text: content, conflicts: 0 } : await merge3(content, base, live, { ours: author, theirs: "live edits" });
+    if (merged.conflicts && attempt === 0) await noteConflict(projectId, rel, merged.conflicts, `${author} for ${session.name}`);
     if (merged.text === live) return { mode, suggestions: 0, conflicts: merged.conflicts };
     const result = await withDoc(projectId, rel, session, (doc) => {
       const text = textOf(doc);

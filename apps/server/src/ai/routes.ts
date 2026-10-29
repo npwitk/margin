@@ -16,6 +16,7 @@ import { cancelThread } from "../connect/relay.ts";
 import { limit } from "../ratelimit.ts";
 import { rememberInLibrary } from "../library.ts";
 import { setAgentActivity } from "../collab.ts";
+import { finish, reporter, revertRun } from "./activity.ts";
 import { getProject } from "../storage.ts";
 import type { Session } from "@margin/shared";
 
@@ -138,10 +139,18 @@ export const aiProjectRoutes = new Hono<AppEnv>()
     const session = c.get("session");
     const agentName = session.agent ?? "Agent";
     const key = activityKey(session);
-    const status = (text: string, file?: string) =>
-      setAgentActivity(id, key, { chatId: key, agent: agentName, for: session.name, status: text, file, at: Date.now() });
+    const status = reporter(id, key, agentName, session);
     status(`Using ${name.replace(/_/g, " ")}`);
-    return c.json(await runTool(name, input ?? {}, { projectId: id, session, agentName, status }));
+    return c.json(await runTool(name, input ?? {}, { projectId: id, session, agentName, key, status }));
+  })
+  // Put back every file an agent changed directly in its current run (from its presence card).
+  .post("/:id/agent/revert", async (c) => {
+    const id = c.req.param("id");
+    await getProject(id);
+    const { key } = await c.req.json<{ key: string }>();
+    const r = await revertRun(id, key, c.get("session"));
+    setAgentActivity(id, key, null);
+    return c.json(r);
   })
   // Margin Connect: a local agent's file change, and the project snapshot for its copy.
   .post("/:id/agent/apply", limit("apply", 3000, 3600), async (c) => {
@@ -167,7 +176,7 @@ export const aiProjectRoutes = new Hono<AppEnv>()
     const { status, file, done } = await c.req.json<{ status?: string; file?: string; done?: boolean }>().catch(() => ({} as { status?: string; file?: string; done?: boolean }));
     const session = c.get("session");
     const key = activityKey(session);
-    if (done) setAgentActivity(id, key, null);
+    if (done) finish(id, key, session.agent ?? "Agent", session);
     else setAgentActivity(id, key, { chatId: key, agent: session.agent ?? "Agent", for: session.name, status: (status ?? "Working").slice(0, 120), file: file?.slice(0, 300), at: Date.now() });
     return c.json({ ok: true });
   })

@@ -1,12 +1,13 @@
 {
   "name": "margin-paper-mcp",
   "version": "0.1.0",
-  "description": "MCP server that connects Claude Code, Codex and other agents to a Margin project",
+  "description": "Connect Claude Code, Codex and other agents to a Margin project (MCP), and sync a local copy with the margin command",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "bin": {
     "margin-paper-mcp": "dist/index.js",
-    "margin-mcp": "dist/index.js"
+    "margin-mcp": "dist/index.js",
+    "margin": "dist/cli.js"
   },
   "files": [
     "dist",

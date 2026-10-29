@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import type { MiddlewareHandler } from "hono";
-import { canAccess } from "./access.ts";
+import { canAccess, canEdit } from "./access.ts";
+import { startUpdates } from "./updates.ts";
 import path from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -34,6 +35,7 @@ app.use("/api/*", async (c, next) => {
   }
   return next();
 });
+startUpdates();
 app.route("/api", authRoutes);
 app.use("/api/projects/*", requireSession);
 app.use("/api/projects", requireSession);
@@ -43,8 +45,14 @@ const projectGate: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!id || id === "import" || c.req.path.endsWith("/join")) return next();
   const exists = await stat(path.join(PROJECTS_DIR, id)).then(() => true, () => false);
   if (exists && /^[a-z0-9-]{1,64}$/.test(id) && !(await canAccess(id, c.get("session")))) return c.json({ error: "Project not found" }, 404);
+  // Advisors read, comment, post updates, use the board and Claude, but don't change files.
+  if (exists && c.req.method !== "GET" && !ADVISOR_OK.test(c.req.path.slice(`/api/projects/${id}`.length)) && !(await canEdit(id, c.get("session")))) {
+    return c.json({ error: "Advisors can read and comment but not change files. Ask an owner to make you an editor (Share)." }, 403);
+  }
   return next();
 };
+/** Requests an advisor may make (agent tools check each tool themselves). */
+const ADVISOR_OK = /^\/(review(\/[^/]+)?|compile|updates(\/.*)?|ai\/.*|agent\/(tools\/[^/]+|activity)|members\/[^/]+)$/;
 app.use("/api/projects/:id", projectGate);
 app.use("/api/projects/:id/*", projectGate);
 app.route("/api/projects", aiProjectRoutes);

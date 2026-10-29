@@ -15,8 +15,20 @@ export interface Project {
   venue?: ProjectVenue;
   /** Set while Claude is turning an idea into a first draft. */
   setup?: { status: "planning" | "done" | "error"; error?: string };
+  /** Named areas of the project (Paper, Slides, Notes…), each a folder, shown as groups in the file list. */
+  sections?: ProjectSection[];
+  /** How AI agents change files: type straight in like a co-author, or leave suggestions to accept. Default "suggest". */
+  agentMode?: AgentMode;
   createdAt: string;
   updatedAt: string;
+}
+
+export type AgentMode = "edit" | "suggest";
+
+/** A part of the project people put files in, e.g. "Slides" → folder slides/. Not a LaTeX \section. */
+export interface ProjectSection {
+  path: string;
+  title: string;
 }
 
 export interface DocumentSettings {
@@ -132,8 +144,8 @@ export interface Checkpoint {
   message: string;
   /** Everyone whose edits are in this version (author first). */
   people?: string[];
-  /** "named": someone saved it on purpose; "auto": saved after editing went quiet; "restore": a restore. */
-  kind?: "named" | "auto" | "restore" | "other";
+  /** "named": someone saved it on purpose; "auto": saved after editing went quiet; "restore": a restore; "local": committed on someone's computer and pushed. */
+  kind?: "named" | "auto" | "restore" | "local" | "other";
   files?: { path: string; additions: number; deletions: number }[];
 }
 
@@ -148,6 +160,39 @@ export interface CheckpointFileDiff {
   patch: string;
 }
 
+/**
+ * A file where two people's changes overlapped (a git push, or an agent
+ * rewriting a file people were typing in). Both versions are in the text
+ * between <<<<<<< and >>>>>>> markers until someone picks.
+ */
+export interface FileConflict {
+  file: string;
+  count: number;
+  /** Who brought the other version in, e.g. "Carol (pushed from a local copy)". */
+  by: string;
+  at: number;
+}
+
+export interface ConflictBlock {
+  /** Character offsets of the whole block, markers included. */
+  from: number;
+  to: number;
+  oursLabel: string;
+  theirsLabel: string;
+  ours: string;
+  theirs: string;
+}
+
+/** Find conflict marker blocks in a text (the standard git ones, 7 characters). */
+export function conflictBlocks(text: string): ConflictBlock[] {
+  const out: ConflictBlock[] = [];
+  const re = /^<{7}(?: (.*))?\n([\s\S]*?)^(?:\|{7}.*\n[\s\S]*?)?={7}\n([\s\S]*?)^>{7}(?: (.*))?(?:\n|$)/gm;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    out.push({ from: m.index, to: m.index + m[0].length, oursLabel: m[1] ?? "", ours: m[2], theirs: m[3], theirsLabel: m[4] ?? "" });
+  }
+  return out;
+}
+
 /** Edits not saved in a version yet. */
 export interface PendingChanges { people: string[]; files: string[]; since: number }
 
@@ -160,7 +205,8 @@ export interface Session {
   agent?: string;
 }
 
-export type MemberRole = "owner" | "editor";
+/** Advisors (an instructor, a supervisor) read, comment, follow the Updates feed and use the board, but don't edit files. */
+export type MemberRole = "owner" | "editor" | "advisor";
 
 export interface Member {
   /** "gh:<login>" for GitHub accounts, "name:<name>" for password sign-in. */
@@ -175,7 +221,7 @@ export interface ProjectAccess {
   /** "workspace": everyone signed in can open every project. "members": only listed members. */
   mode: "workspace" | "members";
   members: Member[];
-  invites: { id: string; createdBy: string; createdAt: string; expiresAt: string }[];
+  invites: { id: string; createdBy: string; createdAt: string; expiresAt: string; role?: MemberRole }[];
   you?: Member;
 }
 
@@ -221,14 +267,43 @@ export function isTextPath(path: string): boolean {
 
 // ── Collaboration (P1) ──────────────────────────────────────────────────────
 
-export type TaskStatus = "todo" | "doing" | "review" | "done";
+/** A board column's id. The defaults are "todo", "doing", "review" and "done"; projects can add their own. */
+export type TaskStatus = string;
 
-export const TASK_COLUMNS: { id: TaskStatus; label: string }[] = [
-  { id: "todo", label: "To do" },
-  { id: "doing", label: "In progress" },
-  { id: "review", label: "In review" },
-  { id: "done", label: "Done" },
+/** What a column means: not started, being worked on, or finished (done tasks aren't overdue). */
+export type ColumnKind = "todo" | "active" | "done";
+/** A column's colour. */
+export type ColumnTone = "todo" | "doing" | "review" | "done" | "red" | "purple";
+
+export interface TaskColumn {
+  id: TaskStatus;
+  label: string;
+  kind: ColumnKind;
+  tone?: ColumnTone;
+}
+
+export const TASK_COLUMNS: TaskColumn[] = [
+  { id: "todo", label: "To do", kind: "todo", tone: "todo" },
+  { id: "doing", label: "In progress", kind: "active", tone: "doing" },
+  { id: "review", label: "In review", kind: "active", tone: "review" },
+  { id: "done", label: "Done", kind: "done", tone: "done" },
 ];
+
+export const COLUMN_TONES: { id: ColumnTone; label: string }[] = [
+  { id: "todo", label: "Grey" }, { id: "doing", label: "Amber" }, { id: "review", label: "Blue" },
+  { id: "done", label: "Green" }, { id: "red", label: "Red" }, { id: "purple", label: "Purple" },
+];
+
+/** The board's columns: the project's own, or the defaults. */
+export const boardColumns = (stored?: TaskColumn[] | null): TaskColumn[] => (stored?.length ? stored : TASK_COLUMNS);
+
+/** The column a task shows in: its own, or the first one if its column was removed. */
+export const columnOf = (columns: TaskColumn[], status: TaskStatus): TaskColumn => columns.find((c) => c.id === status) ?? columns[0];
+
+/** Where new tasks go: the first not-started column. */
+export const firstColumn = (columns: TaskColumn[]): TaskColumn => columns.find((c) => c.kind === "todo") ?? columns[0];
+
+export const toneOf = (c: TaskColumn): ColumnTone => c.tone ?? (c.kind === "done" ? "done" : c.kind === "active" ? "doing" : "todo");
 
 /** Everyone assigned to a task (older tasks only have `assignee`). */
 export const assigneesOf = (t: Pick<Task, "assignee" | "assignees">): string[] => t.assignees?.length ? t.assignees : t.assignee ? [t.assignee] : [];
@@ -287,11 +362,13 @@ export interface Task {
 }
 
 /** What each connected member broadcasts on the project room's awareness. */
+export type WorkspaceView = "write" | "board" | "review" | "updates";
+
 export interface PresenceState {
   user: { name: string; color: string; avatar?: string; agent?: boolean };
   file?: string | null;
   line?: number;
-  view?: "write" | "board" | "review";
+  view?: WorkspaceView;
 }
 
 /** Live events the server pushes through the project room. */
@@ -300,7 +377,36 @@ export interface RoomEvents {
   lastCompile?: { by: string; at: number; ok: boolean; doc?: string };
   /** A version was saved (history changed). */
   historyVersion?: number;
+  /** The Updates feed changed (a new summary, note or comment). */
+  updatesVersion?: number;
 }
+
+/**
+ * The Updates feed: what changed in the paper, written up by Claude after
+ * versions are saved (so an advisor can follow along), and notes people post
+ * ("the ablation didn't work, switch to C") that can become board tasks.
+ */
+export interface ProjectUpdate {
+  id: string;
+  kind: "summary" | "note";
+  at: string;
+  /** "Claude" for summaries; the person for notes. */
+  author: string;
+  title: string;
+  /** Markdown. */
+  body: string;
+  /** For summaries: the versions it covers (git commits). */
+  from?: string;
+  to?: string;
+  /** Who made the changes, and which files. */
+  people?: string[];
+  files?: string[];
+  comments?: UpdateComment[];
+  /** Board tasks made from it. */
+  tasks?: string[];
+}
+
+export interface UpdateComment { id: string; author: string; body: string; at: string }
 
 /** Collaboration document names: one per text file, plus one room per project. */
 export const ROOM = ".margin";

@@ -1,10 +1,14 @@
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/provider";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import * as Y from "yjs";
-import { ROOM, colorFor, docName, type AgentActivity, type PresenceState, type RoomEvents, type Session, type Task, type TaskComment } from "@margin/shared";
+import { ROOM, colorFor, docName, type AgentActivity, type FileConflict, type PresenceState, type RoomEvents, type Session, type Task, type TaskColumn, type TaskComment } from "@margin/shared";
 
 export interface Peer extends PresenceState {
   clientId: number;
+  /** For AI agents: their presence key, what they're doing, and files they changed directly. */
+  agentKey?: string;
+  status?: string;
+  edits?: string[];
 }
 
 /**
@@ -98,8 +102,12 @@ export class ProjectCollab {
   }
 
   get tasks() { return this.room.document.getMap<Task>("tasks"); }
+  /** Board settings: "columns" holds the project's own columns (none = the defaults). */
+  get board() { return this.room.document.getMap<TaskColumn[]>("board"); }
   get taskComments() { return this.room.document.getMap<TaskComment>("taskComments"); }
   get members() { return this.room.document.getMap<{ color: string; lastSeen: string; avatar?: string }>("members"); }
+  /** Files with overlapping changes waiting for someone to pick (see FileConflict). */
+  get conflicts() { return this.room.document.getMap<FileConflict>("conflicts"); }
   get agents() { return this.room.document.getMap<AgentActivity>("agents"); }
   get events() { return this.room.document.getMap<RoomEvents[keyof RoomEvents]>("events"); }
 

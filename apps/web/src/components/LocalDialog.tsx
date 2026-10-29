@@ -26,6 +26,7 @@ export function LocalDialog({ projectId, session, onClose }: { projectId: string
   const [label, setLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [agentTab, setAgentTab] = useState<"claude" | "codex" | "other">("claude");
+  const [mode, setMode] = useState<"agent" | "folder" | "git">("agent");
   const url = `${location.origin}/git/${projectId}.git`;
   const user = session.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "me";
   const token = fresh ?? "<your-token>";
@@ -45,63 +46,61 @@ export function LocalDialog({ projectId, session, onClose }: { projectId: string
     }
   };
 
+  const tokenStep = (
+    <div className="step">
+      <span className="step-n">1</span>
+      <div className="grow">
+        <div>Create an access token. It's a password for your tools; keep it private.</div>
+        {fresh ? (
+          <div className="token-fresh">
+            <CodeLine text={fresh} />
+            <span className="muted small">Copy it now; it won't be shown again. The commands below already include it.</span>
+          </div>
+        ) : (
+          <form className="row gap" onSubmit={create}>
+            <input className="input" placeholder="Label, e.g. “MacBook”" value={label} onChange={(e) => setLabel(e.target.value)} />
+            <button className="btn primary">Create token</button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+  const link = `${location.origin}/#/p/${projectId}`;
+  const cli = "npx -y -p margin-paper-mcp margin";
+
   return (
     <Modal onClose={onClose} wide>
-      <h3 className="modal-title">Work locally</h3>
-      <p className="muted small">Clone this paper to edit it in your own editor or with Claude Code, Codex and other agents. Pushes merge straight into everyone's live view.</p>
-
-      <div className="steps">
-        <div className="step">
-          <span className="step-n">1</span>
-          <div className="grow">
-            <div>Create an access token. Use it as the password when git asks.</div>
-            {fresh ? (
-              <div className="token-fresh">
-                <CodeLine text={fresh} />
-                <span className="muted small">Copy it now; it won't be shown again.</span>
-              </div>
-            ) : (
-              <form className="row gap" onSubmit={create}>
-                <input className="input" placeholder="Label, e.g. “MacBook”" value={label} onChange={(e) => setLabel(e.target.value)} />
-                <button className="btn primary">Create token</button>
-              </form>
-            )}
-          </div>
-        </div>
-        <div className="step">
-          <span className="step-n">2</span>
-          <div className="grow">
-            <div>Clone. Username: <code>{user}</code> (anything works); password: your token.</div>
-            <CodeLine text={`git clone ${url}`} />
-          </div>
-        </div>
-        <div className="step">
-          <span className="step-n">3</span>
-          <div className="grow">
-            <div>Work as usual: <code>git pull</code> picks up teammates' live edits, and <code>git push</code> sends yours.</div>
-            <CodeLine text="cd <folder> && claude" />
-            <span className="muted small">Agents get the full paper, references and board (<code>.margin/board.json</code>).</span>
-          </div>
-        </div>
+      <h3 className="modal-title">Work outside the browser</h3>
+      <div className="segmented mode-tabs local-tabs">
+        <button className={mode === "agent" ? "active" : ""} onClick={() => setMode("agent")}>Let an agent work on it</button>
+        <button className={mode === "folder" ? "active" : ""} onClick={() => setMode("folder")}>A folder on my computer</button>
+        <button className={mode === "git" ? "active" : ""} onClick={() => setMode("git")}>Git</button>
       </div>
 
-      <div className="section-label tokens-label">Connect an agent (MCP)</div>
-      <p className="muted small">Give Claude Code, Codex or any MCP client the same tools Margin's assistant has. It shows up live as “Claude Code for {session.name}”, its edits arrive as suggestions, and it can claim board tasks and answer comments. Run this inside your clone (the project is detected from the git remote), or anywhere with the flags shown.</p>
-      <div className="agent-tabs">
-        <button className={agentTab === "claude" ? "active" : ""} onClick={() => setAgentTab("claude")}>Claude Code</button>
-        <button className={agentTab === "codex" ? "active" : ""} onClick={() => setAgentTab("codex")}>Codex</button>
-        <button className={agentTab === "other" ? "active" : ""} onClick={() => setAgentTab("other")}>Other</button>
-      </div>
-      {agentTab === "claude" && <CodeLine text={`claude mcp add margin -e MARGIN_TOKEN=${token} -- npx -y margin-paper-mcp --url ${location.origin} --project ${projectId}`} />}
-      {agentTab === "codex" && (
-        <pre className="code-block">{`# ~/.codex/config.toml
+      {mode === "agent" && (
+        <>
+          <p className="muted small">The easiest way: Claude Code, Codex or another agent works on the live paper from your terminal, with nothing to download or upload. Everyone sees it as “Claude Code for {session.name}” with its own cursor. It can edit text (directly or as suggestions, set in Share), create documents, sections and files, compile, pick up board tasks and answer comments. You can undo everything it did in one click on its avatar.</p>
+          <div className="steps">
+            {tokenStep}
+            <div className="step">
+              <span className="step-n">2</span>
+              <div className="grow">
+                <div>Connect your agent once:</div>
+                <div className="agent-tabs">
+                  <button className={agentTab === "claude" ? "active" : ""} onClick={() => setAgentTab("claude")}>Claude Code</button>
+                  <button className={agentTab === "codex" ? "active" : ""} onClick={() => setAgentTab("codex")}>Codex</button>
+                  <button className={agentTab === "other" ? "active" : ""} onClick={() => setAgentTab("other")}>Other</button>
+                </div>
+                {agentTab === "claude" && <CodeLine text={`claude mcp add margin -e MARGIN_TOKEN=${token} -- npx -y margin-paper-mcp --url ${location.origin} --project ${projectId}`} />}
+                {agentTab === "codex" && (
+                  <pre className="code-block">{`# ~/.codex/config.toml
 [mcp_servers.margin]
 command = "npx"
 args = ["-y", "margin-paper-mcp", "--url", "${location.origin}", "--project", "${projectId}"]
 env = { MARGIN_TOKEN = "${token}" }`}</pre>
-      )}
-      {agentTab === "other" && (
-        <pre className="code-block">{`{
+                )}
+                {agentTab === "other" && (
+                  <pre className="code-block">{`{
   "mcpServers": {
     "margin": {
       "command": "npx",
@@ -110,9 +109,75 @@ env = { MARGIN_TOKEN = "${token}" }`}</pre>
     }
   }
 }`}</pre>
+                )}
+              </div>
+            </div>
+            <div className="step">
+              <span className="step-n">3</span>
+              <div className="grow">
+                <div>Ask it for something, e.g. <em>“Read the board, take the intro task, tighten the introduction and save a version when you're done.”</em></div>
+              </div>
+            </div>
+          </div>
+        </>
       )}
-      <p className="muted small">Until margin-paper-mcp is on npm, use <code>node &lt;margin repo&gt;/packages/mcp/dist/index.js</code> in place of <code>npx -y margin-paper-mcp</code>.</p>
 
+      {mode === "folder" && (
+        <>
+          <p className="muted small">Edit the files in your own editor, offline, or with an agent in that folder. No git knowledge needed: one command downloads the paper, and one command sends your changes and brings in everyone else's. You need <a href="https://nodejs.org" target="_blank" rel="noreferrer">Node.js</a> and <a href="https://git-scm.com/downloads" target="_blank" rel="noreferrer">git</a> installed; you never have to use git yourself.</p>
+          <div className="steps">
+            {tokenStep}
+            <div className="step">
+              <span className="step-n">2</span>
+              <div className="grow">
+                <div>Download the paper into a new folder (it asks for the token):</div>
+                <CodeLine text={`${cli} clone ${link}`} />
+              </div>
+            </div>
+            <div className="step">
+              <span className="step-n">3</span>
+              <div className="grow">
+                <div>Edit the files. Whenever you want to share your changes, or get your co-authors' latest, run this in that folder:</div>
+                <CodeLine text={`${cli} sync`} />
+                <p className="muted small step-hint">It tells you what it sent and what it got. <code>margin status</code> shows what you've changed and whether Margin has anything newer.</p>
+              </div>
+            </div>
+          </div>
+          <details className="local-help">
+            <summary>What if we changed the same sentence?</summary>
+            <p className="small">Margin merges changes to different places by itself. If you and someone else changed the same lines, <code>margin sync</code> stops and puts both versions in the file between <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> and <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code> lines. Either keep the text you want, delete the marker lines and sync again, or run <code>margin sync --keep-both</code>: both versions go up, and anyone can pick one with a click in Margin's editor.</p>
+          </details>
+          <details className="local-help">
+            <summary>Is anything lost if I forget to sync?</summary>
+            <p className="small">No. Your changes stay in the folder until you sync, and everything that reaches Margin is in History (versions from your computer are marked “Uploaded from a local copy”), so any version can be restored.</p>
+          </details>
+        </>
+      )}
+
+      {mode === "git" && (
+        <>
+          <p className="muted small">The project is a git repository. Pushes merge straight into everyone's live view; pulls include live edits.</p>
+          <div className="steps">
+            {tokenStep}
+            <div className="step">
+              <span className="step-n">2</span>
+              <div className="grow">
+                <div>Clone. Username: <code>{user}</code> (anything works); password: your token.</div>
+                <CodeLine text={`git clone ${url}`} />
+              </div>
+            </div>
+            <div className="step">
+              <span className="step-n">3</span>
+              <div className="grow">
+                <div><code>git pull</code> picks up teammates' live edits, <code>git push</code> sends yours. Force pushes are refused.</div>
+                <span className="muted small">The board is in <code>.margin/board.json</code>. Overlapping lines are kept with conflict markers that name each side, and can be resolved in the editor.</span>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {mode !== "git" && <p className="muted small">Until margin-paper-mcp is on npm, use <code>node &lt;margin repo&gt;/packages/mcp/dist/{mode === "agent" ? "index" : "cli"}.js</code> in place of <code>{mode === "agent" ? "npx -y margin-paper-mcp" : cli}</code>.</p>}
       {error && <p className="error small">{error}</p>}
       <div className="section-label tokens-label">Your tokens</div>
       <div className="token-list">

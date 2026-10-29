@@ -58,6 +58,13 @@ export interface AgentActivity {
   for: string;
   status: string;
   file?: string;
+  /** Where in `file` it's working (character offsets), drawn as its cursor. */
+  from?: number;
+  to?: number;
+  /** It changed `from`–`to` itself just now (rather than reading there). */
+  edited?: boolean;
+  /** Files it changed directly so far; they can be put back in one step. */
+  edits?: string[];
   at: number;
 }
 

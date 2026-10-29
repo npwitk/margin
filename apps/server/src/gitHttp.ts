@@ -10,9 +10,10 @@ import { flushProject, pauseProject, resumeProject } from "./collab.ts";
 import { saveVersion } from "./versions.ts";
 import { checkpoint, withGitLock } from "./git.ts";
 import { head, mergePushed } from "./pushMerge.ts";
+import { scheduleSummary } from "./updates.ts";
 import { projectDir } from "./storage.ts";
 import { verifyToken } from "./tokens.ts";
-import { canAccess } from "./access.ts";
+import { canAccess, canEdit } from "./access.ts";
 import { isActiveMember } from "./workspace.ts";
 
 /**
@@ -75,6 +76,7 @@ export async function handleGit(c: Context) {
   const service = rest === "/info/refs" ? c.req.query("service") : rest.slice(1);
   if (service !== "git-upload-pack" && service !== "git-receive-pack") return c.text("Dumb HTTP is not supported\n", 403);
   const isPush = service === "git-receive-pack" && c.req.method === "POST";
+  if (service === "git-receive-pack" && !(await canEdit(id, owner))) return c.text("Advisors can pull but not push. Ask an owner to make you an editor.\n", 403);
 
   await ensureConfig(dir);
   // Fetches see live edits. (Not before pushes: that would move the branch
@@ -156,7 +158,7 @@ export async function handleGit(c: Context) {
     const finished = !isPush ? exited : exited
       .then(async () => {
         const newHead = await head(dir);
-        if (oldHead && newHead !== oldHead) await mergePushed(id, oldHead, newHead);
+        if (oldHead && newHead !== oldHead) { await mergePushed(id, oldHead, newHead, member); void scheduleSummary(id, true).catch(() => {}); }
       })
       .catch((err) => console.error("merge after push:", err))
       .finally(() => resumeProject(id));

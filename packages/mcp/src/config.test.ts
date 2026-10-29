@@ -14,3 +14,11 @@ test("flags beat env; missing values explain themselves", () => {
   assert.deepEqual(c, { url: "https://a", project: "p", token: "mgn_t", agentName: undefined });
   assert.throws(() => loadConfig([], {}, "/"), /missing --url/);
 });
+
+test("parses the links people copy from the browser", async () => {
+  const { parseLink } = await import("./config.js");
+  assert.deepEqual(parseLink("https://paper.example.com/#/p/my-paper-1a2b3c"), { url: "https://paper.example.com", project: "my-paper-1a2b3c", token: undefined });
+  assert.deepEqual(parseLink("http://localhost:5173/#/p/x-1?tab=board"), { url: "http://localhost:5173", project: "x-1", token: undefined });
+  assert.deepEqual(parseLink("https://host/git/p.git"), { url: "https://host", project: "p", token: undefined });
+  assert.equal(parseLink("https://host/#/library"), null);
+});

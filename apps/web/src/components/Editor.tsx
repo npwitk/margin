@@ -16,6 +16,8 @@ import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import * as Y from "yjs";
 import type { CiteOptions } from "@margin/shared";
 import type { ProjectCollab } from "../lib/collab.ts";
+import { agentCursors } from "../lib/agentCursors.ts";
+import { conflictMarkers } from "../lib/conflicts.ts";
 import { reviewDecorations } from "../lib/review.ts";
 
 export interface EditorHandle {
@@ -39,6 +41,10 @@ interface Props {
   onComment(): void;
   onThreadClick(id: string): void;
   onError(message: string): void;
+  /** View only (advisors): no typing, comments still work. */
+  readOnly?: boolean;
+  /** How many overlapping-change blocks the open file has (after every edit). */
+  onConflicts?(path: string, count: number): void;
   /** References for \cite completion: the paper's own, then the library's. */
   citeOptions?(): Promise<CiteOptions>;
   /** A library reference was picked: put it in the paper; resolves to the key to cite. */
@@ -195,6 +201,9 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
           theme,
           yCollab(ytext, provider.awareness, { undoManager: um }),
           reviewDecorations(provider.document, (id) => p.current.onThreadClick(id)),
+          agentCursors(props.collab.agents, path),
+          conflictMarkers((n) => p.current.onConflicts?.(path, n)),
+          EditorState.readOnly.of(!!props.readOnly),
           Prec.highest(keymap.of([
             { key: "Mod-s", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
             { key: "Mod-Enter", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
@@ -221,7 +230,7 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
       }
     })();
     return () => { cancelled = true; };
-  }, [props.collab, props.path]);
+  }, [props.collab, props.path, props.readOnly]);
 
   useEffect(() => {
     if (!props.revealAt) return;
