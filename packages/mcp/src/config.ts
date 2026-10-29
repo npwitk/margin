@@ -30,6 +30,14 @@ export function parseRemote(remote: string) {
   return { url: `${proto}://${host}${base}`, project, token: password ? decodeURIComponent(password) : undefined };
 }
 
+/** A project link people copy from the browser (https://host/#/project/<id>) or its git URL. */
+export function parseLink(link: string) {
+  const fromGit = parseRemote(link);
+  if (fromGit) return fromGit;
+  const m = /^(https?:\/\/[^/#?]+(?:\/[^#?]*?)?)\/?(?:#\/?)?(?:project|p)\/([a-z0-9-]+)/.exec(link.trim());
+  return m ? { url: m[1].replace(/\/$/, ""), project: m[2], token: undefined } : null;
+}
+
 function gitRemote(cwd: string) {
   try {
     return execFileSync("git", ["remote", "get-url", "origin"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -51,7 +59,7 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env, cwd 
   const token = f.token ?? env.MARGIN_TOKEN ?? fromGit?.token ?? "";
   const missing = [!url && "--url / MARGIN_URL", !project && "--project / MARGIN_PROJECT", !token && "--token / MARGIN_TOKEN"].filter(Boolean);
   if (missing.length) {
-    throw new Error(`margin-mcp: missing ${missing.join(", ")}. Run it inside a clone of a Margin project, or pass them explicitly. Create a token in Margin → Local.`);
+    throw new Error(`margin-mcp: missing ${missing.join(", ")}. Run it inside a clone of a Margin project, or pass them explicitly. Create a token with the terminal button in Margin (“Work outside the browser”).`);
   }
   return { url, project, token, agentName: f.name ?? env.MARGIN_AGENT_NAME };
 }

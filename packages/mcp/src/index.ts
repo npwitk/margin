@@ -49,7 +49,7 @@ async function main() {
       signal: AbortSignal.timeout(180_000),
     });
     const body = await res.json().catch(() => ({}));
-    if (res.status === 401) throw new Error("Margin rejected the access token. Create a new one in Margin → Local and update MARGIN_TOKEN.");
+    if (res.status === 401) throw new Error("Margin rejected the access token. Create a new one with the terminal button in Margin and update MARGIN_TOKEN.");
     if (res.status === 404) throw new Error(`Margin project “${config.project}” not found at ${config.url}.`);
     if (!res.ok) throw new Error(body.error ?? `Margin returned HTTP ${res.status}`);
     return body;

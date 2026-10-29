@@ -637,7 +637,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       { id: "newfile", label: "New file…", section: "Action", icon: "plus", run: () => void onTreeAction("newFile", "") },
       { id: "upload", label: "Upload files…", section: "Action", icon: "upload", run: () => void onTreeAction("upload", "") },
       { id: "share", label: "Share: members and invite links…", section: "Project", icon: "plus", run: () => setShareOpen(true) },
-      { id: "local", label: "Work locally (git clone, agents)…", section: "Project", icon: "terminal", run: () => setLocalOpen(true) },
+      { id: "local", label: "Work outside the browser (Claude Code, a local folder, git)…", section: "Project", icon: "terminal", run: () => setLocalOpen(true) },
       { id: "rename-project", label: "Rename project…", section: "Project", icon: "file", run: () => void renameProject() },
       { id: "projects", label: "Back to all projects", section: "Navigate", icon: "back", run: () => navigate({ name: "projects" }) },
     ];
@@ -714,7 +714,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           <div className="tool-group">
             <button className="icon-btn" onClick={() => setPaletteOpen(true)} title={`Search and commands (${MOD}K)`}><Icon name="search" /></button>
             <button className="icon-btn" onClick={() => setHistoryOpen(true)} title="Version history"><Icon name="history" /></button>
-            <button className="icon-btn" onClick={() => setLocalOpen(true)} title="Work locally: git clone, Claude Code, Codex"><Icon name="terminal" /></button>
+            <button className="icon-btn" onClick={() => setLocalOpen(true)} title="Work outside the browser: Claude Code and other agents, a folder on your computer, git"><Icon name="terminal" /></button>
             <button className="icon-btn" onClick={() => setShareOpen(true)} title="Share: members and invite links"><Icon name="share" /></button>
           </div>
           <button className="btn primary compile-btn" onClick={compile} disabled={compiling} title={`Compile (${MOD}S)`}>

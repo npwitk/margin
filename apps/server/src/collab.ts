@@ -91,7 +91,11 @@ const paused = new Set<string>();
 
 async function persist(name: string, doc: Y.Doc, { withState = true } = {}) {
   const t = target(name);
-  if (paused.has(t.projectId)) return;
+  // While git rewrites the working tree, leave files alone; the CRDT cache lives outside it, so keep that.
+  if (paused.has(t.projectId)) {
+    if (withState) await writeAtomic(ystatePath(name), Y.encodeStateAsUpdate(doc));
+    return;
+  }
   if (t.room) {
     const comments = [...doc.getMap<TaskComment>("taskComments").values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     const columns = doc.getMap<TaskColumn[]>("board").get("columns");

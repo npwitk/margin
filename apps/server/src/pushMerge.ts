@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import * as Y from "yjs";
-import { ROOM, isTextPath, type Task, type TaskColumn } from "@margin/shared";
+import { ROOM, conflictBlocks, isTextPath, type Task, type TaskColumn } from "@margin/shared";
 import { applyText, dropDoc, emit, liveDoc, mergeIntoLive, noteConflict } from "./collab.ts";
 import { editorsOf } from "./versions.ts";
 import { projectDir } from "./storage.ts";
@@ -106,8 +106,10 @@ export async function mergePushed(projectId: string, oldHead: string, newHead: s
     const merged = await merge3(oursText, baseBuf?.toString() ?? "", theirsBuf.toString(), {
       ours: `live edits${live.length ? ` (${live.join(", ")})` : ""}`, theirs: `pushed by ${pusher}`,
     });
+    // Overlaps from this merge, or ones the pusher sent on purpose (margin sync --keep-both).
+    const blocks = merged.text.includes("<<<<<<<") ? conflictBlocks(merged.text).length : 0;
     conflicts += merged.conflicts;
-    if (merged.conflicts) await noteConflict(projectId, rel, merged.conflicts, `${pusher} (pushed from a local copy)`);
+    if (blocks) await noteConflict(projectId, rel, blocks, `${pusher} (pushed from a local copy)`);
     if (doc && state) mergeIntoLive(doc, state, (fork) => applyText(fork.getText("content"), merged.text));
     else await writeFile(abs, merged.text);
   }
