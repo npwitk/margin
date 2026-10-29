@@ -2,6 +2,7 @@ import { StateEffect } from "@codemirror/state";
 import { Decoration, ViewPlugin, WidgetType, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
 import type * as Y from "yjs";
 import type { AgentActivity } from "@margin/shared";
+import { agentLogoSvg, brandOf } from "../components/AgentLogo.tsx";
 
 /** How long an agent's cursor stays after its last action, and how long an edit glows. */
 const CURSOR_MS = 2 * 60_000;
@@ -16,7 +17,9 @@ class AgentCaret extends WidgetType {
     el.title = this.status;
     const tag = document.createElement("span");
     tag.className = "cm-agent-tag";
-    tag.textContent = this.label;
+    const brand = brandOf(this.label);
+    tag.innerHTML = brand ? agentLogoSvg(brand, 9) : "";
+    tag.append(document.createTextNode(this.label));
     el.append(tag);
     return el;
   }

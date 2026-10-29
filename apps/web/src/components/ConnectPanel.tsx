@@ -3,6 +3,7 @@ import type { AgentThread, ApplyMode, ConnectDevice, ThreadEntry } from "@margin
 import type { useConnect } from "../lib/connect.ts";
 import { renderMarkdown } from "../lib/markdown.ts";
 import { relativeTime } from "../lib/time.ts";
+import { AgentLogo, brandOf } from "./AgentLogo.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
 import { Avatar } from "./Presence.tsx";
 
@@ -139,7 +140,7 @@ function Entry({ entry: e, agentName, device, threadId, connect, onOpenFile }: {
     case "user":
       return <div className="msg user"><Avatar name={e.by} size="sm" /><div className="msg-body"><div className="msg-author">{e.by}</div><div className="msg-text">{e.text}</div></div></div>;
     case "text":
-      return <div className="msg assistant-msg"><span className="agent-mark sm">{agentName.slice(0, 1)}</span><div className="msg-body"><div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(e.text) }} /></div></div>;
+      return <div className="msg assistant-msg"><span className={`agent-mark sm ${brandOf(agentName) ?? ""}`}>{brandOf(agentName) ? <AgentLogo brand={brandOf(agentName)!} size={11} /> : agentName.slice(0, 1)}</span><div className="msg-body"><div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(e.text) }} /></div></div>;
     case "thought":
       return <details className="thought"><summary>Thinking</summary><div className="small muted">{e.text}</div></details>;
     case "tool":

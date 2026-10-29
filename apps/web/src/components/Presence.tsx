@@ -1,15 +1,17 @@
 import { useState } from "react";
 import { colorFor } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
+import { AgentLogo, brandOf } from "./AgentLogo.tsx";
 import type { Peer } from "../lib/collab.ts";
 import { useAvatar } from "../lib/avatars.ts";
 
 export function Avatar({ name, size, online, title, src, agent }: { name: string; size?: "sm" | "xs"; online?: boolean; title?: string; src?: string; agent?: boolean }) {
   const known = useAvatar(name);
+  const brand = agent ? brandOf(name) : null;
   src = src ?? known;
   return (
-    <span className={`avatar ${size ?? ""} ${online ? "online" : ""} ${agent ? "agent" : ""}`} style={agent ? undefined : { background: colorFor(name) }} title={title ?? name}>
-      {agent ? <Icon name="sparkle" size={11} /> : src ? <img src={src} alt="" /> : name.slice(0, 1).toUpperCase()}
+    <span className={`avatar ${size ?? ""} ${online ? "online" : ""} ${agent ? `agent ${brand ?? ""}` : ""}`} style={agent ? undefined : { background: colorFor(name) }} title={title ?? name}>
+      {agent ? (brand ? <AgentLogo brand={brand} size={size === "xs" ? 9 : 12} /> : <Icon name="sparkle" size={11} />) : src ? <img src={src} alt="" /> : name.slice(0, 1).toUpperCase()}
     </span>
   );
 }
