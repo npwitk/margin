@@ -9,7 +9,7 @@ import { Avatar } from "./Presence.tsx";
 
 export function ShareDialog({ projectId, session, onClose }: { projectId: string; session: Session; onClose(): void }) {
   const [access, setAccess] = useState<ProjectAccess | null>(null);
-  const [link, setLink] = useState<{ url: string; role: "editor" | "advisor" } | null>(null);
+  const [link, setLink] = useState<{ url: string; role: "editor" | "advisor"; admits: boolean } | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,7 +28,7 @@ export function ShareDialog({ projectId, session, onClose }: { projectId: string
   const invite = (role: "editor" | "advisor") => run(async () => {
     const r = await api.createInvite(projectId, role);
     const url = `${location.origin}/#/join/${projectId}/${r.token}`;
-    setLink({ url, role });
+    setLink({ url, role, admits: !!r.admits });
     try { await navigator.clipboard.writeText(url); setCopied(true); } catch { /* manual copy */ }
   });
 
@@ -55,7 +55,7 @@ export function ShareDialog({ projectId, session, onClose }: { projectId: string
                 </div>
               )}
               <span className="muted small">{link
-                ? `Anyone with this link can join as ${link.role === "advisor" ? "an advisor (read, comment, Updates, board)" : "an editor"} for 14 days.`
+                ? `Anyone with this link can join as ${link.role === "advisor" ? "an advisor (read, comment, Updates, board)" : "an editor"} for 14 days.${link.admits ? " It also lets them sign in to Margin with GitHub, as a guest who sees only this paper; no separate Margin invite needed." : ""}`
                 : "Links expire after 14 days. Advisors (an instructor or supervisor) can read, comment, follow Updates and use the board, but not change files."}</span>
             </div>
           )}

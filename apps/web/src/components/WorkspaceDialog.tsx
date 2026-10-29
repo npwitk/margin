@@ -64,7 +64,7 @@ export function WorkspaceDialog({ session, onClose }: { session: Session; onClos
               return (
                 <div key={m.login} className="token-row">
                   <Avatar name={m.name} src={m.avatar} size="sm" />
-                  <span className="grow">{m.name}{me && <span className="muted"> (you)</span>} <span className="muted small">@{m.login} · joined {relativeTime(m.joinedAt)}{m.invitedBy ? ` · invited by ${m.invitedBy}` : ""}</span></span>
+                  <span className="grow">{m.name}{me && <span className="muted"> (you)</span>} <span className="muted small">@{m.login} · joined {relativeTime(m.joinedAt)}{m.invitedBy ? ` · invited by ${m.invitedBy}` : ""}{m.guest ? " · guest: sees only the papers they were invited to" : ""}</span></span>
                   {info.admin && !fixed && !me ? (
                     <>
                       <select value={m.role} onChange={(e) => void run(() => api.setWorkspaceRole(m.login, e.target.value as "admin" | "member"))}>

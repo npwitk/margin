@@ -163,7 +163,7 @@ export const api = {
   insertFromLibrary: (id: string, refId: string) => req<{ key: string; file: string; added: boolean; note?: string }>(`${P(id)}/library/${refId}`, json("POST")),
 
   access: (id: string) => req<ProjectAccess>(`${P(id)}/access`),
-  createInvite: (id: string, role: "editor" | "advisor" = "editor") => req<{ id: string; token: string; expiresAt: string }>(`${P(id)}/invites`, json("POST", { role })),
+  createInvite: (id: string, role: "editor" | "advisor" = "editor") => req<{ id: string; token: string; expiresAt: string; admits?: boolean }>(`${P(id)}/invites`, json("POST", { role })),
   revokeInvite: (id: string, inviteId: string) => req(`${P(id)}/invites/${inviteId}`, { method: "DELETE" }),
   join: (id: string, token: string) => req<Project>(`${P(id)}/join`, json("POST", { token })),
   removeMember: (id: string, memberId: string) => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }),

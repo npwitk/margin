@@ -11,7 +11,9 @@ export function Login({ methods, onLogin }: { methods: AuthMethods; onLogin(s: S
   const [error, setError] = useState<string | null>(() => new URLSearchParams(location.search).get("auth_error"));
   const [busy, setBusy] = useState(false);
   const showForm = methods.password || methods.open;
-  const invited = new URLSearchParams(location.search).has("invited");
+  // A project's invite link (#/join/<project>/<token>): signing in with GitHub joins that project too.
+  const join = /^#\/join\/([a-z0-9-]+)\/([\w-]+)/.exec(location.hash);
+  const invited = new URLSearchParams(location.search).has("invited") || !!join;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,10 +35,10 @@ export function Login({ methods, onLogin }: { methods: AuthMethods; onLogin(s: S
         <AppMark size={72} />
         <h1>Margin</h1>
         <p className="muted">Write, compile and review papers together.</p>
-        {invited && !error && <p className="invite-note">You've been invited. Continue with GitHub to join.</p>}
+        {invited && !error && <p className="invite-note">{join ? "You've been invited to a paper. Continue with GitHub to open it." : "You've been invited. Continue with GitHub to join."}</p>}
         {methods.inviteOnly && !invited && <p className="muted small">This workspace is invite-only. Sign in with the GitHub account you were invited with.</p>}
         {methods.github && (
-          <a className="btn block github" href="/api/auth/github">
+          <a className="btn block github" href={join ? `/api/auth/join/${join[1]}/${join[2]}` : "/api/auth/github"}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={GITHUB_MARK} /></svg>
             Continue with GitHub
           </a>

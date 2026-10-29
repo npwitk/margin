@@ -16,6 +16,7 @@ import { addSection, createDocument, listDocuments, pdfPathOf, renameDocuments, 
 import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
 import { changesIn, withGitLock } from "./git.ts";
 import { editorName, listVersions, pendingChanges, recordEdit, restoreVersion, saveVersion } from "./versions.ts";
+import { INVITE_ONLY } from "./config.ts";
 import { addEntry, movePath, removePath } from "./entries.ts";
 import { commentOn, listUpdates, postNote, summarizeNow, tasksFromUpdate } from "./updates.ts";
 import { describeApiError } from "./ai/client.ts";
@@ -24,7 +25,7 @@ import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
 import { addOwner, canAccess, requireEdit, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
 import { limit } from "./ratelimit.ts";
-import { createInvite as createWorkspaceInvite, removeMember as removeWorkspaceMember, revokeInvite as revokeWorkspaceInvite, setRole as setWorkspaceRole, workspaceInfo } from "./workspace.ts";
+import { isAdmin as isWorkspaceAdmin, createInvite as createWorkspaceInvite, removeMember as removeWorkspaceMember, revokeInvite as revokeWorkspaceInvite, setRole as setWorkspaceRole, workspaceInfo } from "./workspace.ts";
 import {
   HttpError, createEntry, createProjectFromFiles, etagOf, createProject, deleteEntry, getProject, listFiles, listProjects, moveEntry,
   projectDir, readText, resolvePath, syncWorkDir, touchProject, updateProject, workDir, writeBinary, writeText,
@@ -391,7 +392,9 @@ export const projectRoutes = new Hono<AppEnv>()
   .get("/:id/access", async (c) => c.json(await getAccess(c.req.param("id"), c.get("session"))))
   .post("/:id/invites", async (c) => {
     const { role } = await c.req.json<{ role?: "editor" | "advisor" }>().catch(() => ({ role: undefined }));
-    return c.json(await createInvite(c.req.param("id"), c.get("session"), role === "advisor" ? "advisor" : "editor"), 201);
+    // On an invite-only server, an admin's link also lets the person in (as a guest who sees only this project).
+    const admits = INVITE_ONLY && (await isWorkspaceAdmin(c.get("session")));
+    return c.json({ ...(await createInvite(c.req.param("id"), c.get("session"), role === "advisor" ? "advisor" : "editor", admits)), admits }, 201);
   })
   .delete("/:id/invites/:invite", async (c) => { await revokeInvite(c.req.param("id"), c.get("session"), c.req.param("invite")); return c.json({ ok: true }); })
   .post("/:id/join", limit("join", 20, 3600), async (c) => {

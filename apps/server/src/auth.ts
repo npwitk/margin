@@ -3,7 +3,8 @@ import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import type { AuthMethods, Session } from "@margin/shared";
 import { GITHUB, INVITE_ONLY, OPEN_ACCESS, PASSWORD, PUBLIC_URL, SECRET, SECURE_COOKIES } from "./config.ts";
-import { admit, isActiveMember, peekInvite } from "./workspace.ts";
+import { admit, admitGuest, isActiveMember, peekInvite } from "./workspace.ts";
+import { admittingInvite, joinWithInvite } from "./access.ts";
 import { verifyToken } from "./tokens.ts";
 
 export type AppEnv = { Variables: { session: Session } };
@@ -80,6 +81,14 @@ export const authRoutes = new Hono<AppEnv>()
     return c.redirect("/?invited=1");
   })
 
+  // A project's invite link (#/join/<project>/<token>) from someone who isn't signed in: remember it, then sign in with GitHub.
+  .get("/auth/join/:project/:token", async (c) => {
+    const { project, token } = c.req.param();
+    if (!/^[a-z0-9-]{1,64}$/.test(project) || !/^[\w-]{10,80}$/.test(token)) return fail(c, "That invite link is broken. Ask for a new one.");
+    await setSignedCookie(c, "margin_join", `${project}/${token}`, SECRET, { httpOnly: true, sameSite: "Lax", secure: SECURE_COOKIES, path: "/api/auth", maxAge: 3600 });
+    return c.redirect(GITHUB ? "/api/auth/github" : `/#/join/${project}/${token}`);
+  })
+
   // ── GitHub OAuth ───────────────────────────────────────────────────────
   .get("/auth/github", async (c) => {
     if (!GITHUB) return c.json({ error: "GitHub login is not configured" }, 404);
@@ -110,10 +119,30 @@ export const authRoutes = new Hono<AppEnv>()
 
     const name = (user.name?.trim() || user.login).slice(0, 40);
     const invite = (await getSignedCookie(c, SECRET, "margin_invite")) || undefined;
-    const verdict = await admit({ login: user.login, name, avatar: user.avatar_url }, invite);
+    // A project invite link: it may let them into the workspace (as a guest), and it joins them to that project.
+    const join = ((await getSignedCookie(c, SECRET, "margin_join")) || "").match(/^([a-z0-9-]{1,64})\/([\w-]{10,80})$/);
+    deleteCookie(c, "margin_join", { path: "/api/auth" });
+    const profile = { login: user.login, name, avatar: user.avatar_url };
+    let verdict = await admit(profile, invite);
+    if (!verdict.ok && join) {
+      const admitting = await admittingInvite(join[1], join[2]).catch(() => null);
+      if (admitting) {
+        await admitGuest(profile, admitting.createdBy);
+        verdict = { ok: true };
+      }
+    }
     if (!verdict.ok) return fail(c, verdict.reason);
     if (invite) deleteCookie(c, "margin_invite", { path: "/api/auth" });
-    await startSession(c, { name, github: user.login, avatar: user.avatar_url });
+    const session: Session = { name, github: user.login, avatar: user.avatar_url };
+    await startSession(c, session);
+    if (join) {
+      try {
+        await joinWithInvite(join[1], session, join[2]);
+        return c.redirect(`/#/p/${join[1]}`);
+      } catch (err) {
+        return fail(c, (err as Error).message);
+      }
+    }
     return c.redirect("/");
   })
   .post("/login", async (c) => {

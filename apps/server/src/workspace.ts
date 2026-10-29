@@ -58,6 +58,8 @@ export async function admit(user: { login: string; name: string; avatar?: string
   if (existing) {
     existing.name = user.name; existing.avatar = user.avatar;
     if (isAdminLogin(login)) existing.role = "admin";
+    // A guest who now has a workspace invite becomes a full member.
+    if (existing.guest && inviteToken && takeInvite(s, inviteToken)) delete existing.guest;
     await store(s);
     return { ok: true };
   }
@@ -68,17 +70,41 @@ export async function admit(user: { login: string; name: string; avatar?: string
   };
   if (isAdminLogin(login)) return add("admin");
   if (inviteToken) {
-    const h = Buffer.from(sha(inviteToken));
-    const inv = s.invites.find((i) => timingSafeEqual(Buffer.from(i.hash), h));
-    if (inv && Date.parse(inv.expiresAt) > Date.now() && inv.uses < inv.maxUses) {
-      inv.uses++;
-      return add("member", inv.createdBy);
-    }
+    const inv = takeInvite(s, inviteToken);
+    if (inv) return add("member", inv.createdBy);
     return { ok: false, reason: "This invite link has expired or was already used. Ask for a new one." };
   }
   if (!INVITE_ONLY && GITHUB && (GITHUB.allow.includes("*") || GITHUB.allow.includes(login))) return add("member");
   if (INVITE_ONLY && GITHUB?.allow.includes(login)) return add("member");
   return { ok: false, reason: INVITE_ONLY ? "Margin here is invite-only. Ask an admin for an invite link." : `@${user.login} isn't on this workspace's access list.` };
+}
+
+/** Use up one use of a workspace invite, if it's valid. */
+function takeInvite(s: Stored, token: string) {
+  const h = Buffer.from(sha(token));
+  const inv = s.invites.find((i) => timingSafeEqual(Buffer.from(i.hash), h));
+  if (!inv || Date.parse(inv.expiresAt) <= Date.now() || inv.uses >= inv.maxUses) return null;
+  inv.uses++;
+  return inv;
+}
+
+/**
+ * Let someone in through a project's invite link (e.g. an advisor): they
+ * become a guest who sees only the projects they're invited to. Existing
+ * members are left as they are.
+ */
+export async function admitGuest(user: { login: string; name: string; avatar?: string }, invitedBy: string) {
+  const s = await load();
+  const login = memberKey(user.login);
+  if (s.members.some((m) => m.login === login) || isAdminLogin(login)) return;
+  s.members.push({ login, name: user.name, avatar: user.avatar, role: "member", guest: true, joinedAt: new Date().toISOString(), invitedBy });
+  await store(s);
+}
+
+/** A guest sees only projects they were invited to. */
+export async function isGuest(s: Pick<Session, "github">) {
+  if (!INVITE_ONLY || !s.github || isAdminLogin(s.github)) return false;
+  return !!(await load()).members.find((m) => m.login === memberKey(s.github!))?.guest;
 }
 
 /** Check an invite token without using it (for the landing page). */

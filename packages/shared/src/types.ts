@@ -215,13 +215,15 @@ export interface Member {
   role: MemberRole;
   avatar?: string;
   joinedAt: string;
+  /** Added by opening the project (workspace mode), not by an invite; an invite link can still set their role. */
+  auto?: boolean;
 }
 
 export interface ProjectAccess {
   /** "workspace": everyone signed in can open every project. "members": only listed members. */
   mode: "workspace" | "members";
   members: Member[];
-  invites: { id: string; createdBy: string; createdAt: string; expiresAt: string; role?: MemberRole }[];
+  invites: { id: string; createdBy: string; createdAt: string; expiresAt: string; role?: MemberRole; admits?: boolean }[];
   you?: Member;
 }
 
@@ -233,6 +235,8 @@ export interface WorkspaceMember {
   role: "admin" | "member";
   joinedAt: string;
   invitedBy?: string;
+  /** Came in through a project's invite link (e.g. an advisor): sees only the projects they were invited to. */
+  guest?: boolean;
 }
 
 export interface WorkspaceInfo {
