@@ -12,12 +12,17 @@ import { loadConfig } from "./config.js";
  * agent shows up in presence with its own cursor.
  */
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 
 const INSTRUCTIONS = `This connects you to a Margin project: LaTeX documents (a paper, and maybe slides, letters, a rebuttal…) that several co-authors edit live in their browsers. You work on the live paper directly: no clone, no commits, nothing to push.
 
+Find the right document first:
+- Call list_documents before editing. It shows the project's sections (named parts of the project in Margin's file list, e.g. "SAC 2027 (Submission Version)") and the documents in each, with the names people see.
+- When the user names a section or document, match that name there and edit that document's files. If several match or none does, ask; don't guess from file names.
+- The Margin project is the paper. Edit it through these tools, not a local folder or clone that happens to be open, which may be an older copy.
+
 Work like a co-author:
-- read_file / search to look around; list_documents shows every document (paper, slides…).
+- read_file / search to look around.
 - edit_file to change a passage (copy \`find\` exactly from read_file, one focused change per call); write_file to create or rewrite a whole file; add_section to add a section file to a document; create_folder / move_path / delete_path to organise; create_document for new slides, letters, posters.
 - Co-authors watch your cursor and edits appear as you go, and can undo your whole run in one step. If the project is set to "Agents suggest", edits arrive as suggestions instead and file changes are refused; the tool result tells you.
 - Use propose_edit when the authors should decide (claims, results, framing); add_comment for questions.

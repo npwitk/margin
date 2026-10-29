@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type * as Y from "yjs";
 import { z } from "zod";
-import { ROOM, boardColumns, columnOf, firstColumn, type Engine, type TaskColumn, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
+import { ROOM, documentTitleOf, boardColumns, columnOf, firstColumn, type Engine, type TaskColumn, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
 import { emit, withDoc } from "../collab.ts";
 import { addSection, createDocument, listDocuments, updateDocument } from "../documents.ts";
 import { compileProject } from "../compile.ts";
@@ -353,12 +353,29 @@ const DEFS: Record<string, Def> = {
   },
 
   list_documents: {
-    description: "List the LaTeX documents in this project (paper, slides, letters…): each root .tex file with its title, document class and engine, and which one is the default.",
+    description:
+      "Start here. Lists the project's sections (named parts people see in Margin's file list, e.g. \"Slides\" or \"SAC 2027 (Submission Version)\") and the LaTeX documents in each: path, the name shown in Margin, its \\title, class, and which one is the default. " +
+      "When someone refers to a section or document by name, match it here and work on that document's files.",
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
-      const docs = await listDocuments(ctx.projectId);
-      const lines = docs.map((d) => `${d.path}: "${d.title}" (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}${d.archived ? " [archived]" : ""}${d.hasPdf ? "" : " (not compiled yet)"}`);
-      return { summary: `Listed ${docs.length} document${docs.length === 1 ? "" : "s"}`, content: lines.join("\n") || "(no documents)" };
+      const [docs, project] = await Promise.all([listDocuments(ctx.projectId), getProject(ctx.projectId)]);
+      // The deepest section a document's folder is in.
+      const sections = [...(project.sections ?? [])].sort((a, b) => b.path.length - a.path.length);
+      const home = (p: string) => sections.find((x) => p.startsWith(`${x.path}/`));
+      const textCache = new Map<string, string>();
+      for (const d of docs) if (d.customTitle) textCache.set(d.path, (await textOf(ctx.projectId, d.path)) ?? "");
+      const line = (d: (typeof docs)[number]) => {
+        const latexTitle = d.customTitle ? documentTitleOf(textCache.get(d.path) ?? "") : null;
+        return `- ${d.path}: “${d.title}”${latexTitle && latexTitle !== d.title ? ` (its \\title: “${latexTitle}”)` : ""} (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}${d.archived ? " [archived]" : ""}${d.hasPdf ? "" : " (not compiled yet)"}`;
+      };
+      const blocks: string[] = [];
+      for (const x of [...(project.sections ?? [])]) {
+        const inside = docs.filter((d) => home(d.path) === x);
+        blocks.push(`Section “${x.title}” (folder ${x.path}/):\n${inside.map(line).join("\n") || "- (no documents yet)"}`);
+      }
+      const loose = docs.filter((d) => !home(d.path));
+      if (loose.length) blocks.push(`${sections.length ? "Not in a section:\n" : ""}${loose.map(line).join("\n")}`);
+      return { summary: `Listed ${docs.length} document${docs.length === 1 ? "" : "s"}`, content: blocks.join("\n\n") || "(no documents)" };
     },
   },
 

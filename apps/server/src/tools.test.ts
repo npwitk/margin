@@ -102,3 +102,15 @@ test("an advisor's agent can comment and use the board but not change files", as
   const task = await runTool("create_task", { title: "Rerun experiment B" }, bob);
   assert.ok(!task.isError, task.content);
 });
+
+test("list_documents names sections, so an agent can find “SAC 2027 (Submission Version)”", async () => {
+  const sections = await import("./sections.ts");
+  const docs = await import("./documents.ts");
+  const p = await storage.createProject("Venues", "article", "Alice");
+  await sections.addProjectSection(p.id, { title: "SAC 2027 (Submission Version)" }, { name: "Alice" });
+  const sac = await docs.createDocument(p.id, { title: "Federated SIEM", template: "article", path: "sac-2027-submission-version/main.tex", layout: "beside" });
+  await docs.updateDocument(p.id, sac, { title: "SAC submission" });
+  const r = await runTool("list_documents", {}, ctx(p.id));
+  assert.match(r.content, /Section “SAC 2027 \(Submission Version\)” \(folder sac-2027-submission-version\/\):\n- sac-2027-submission-version\/main\.tex: “SAC submission” \(its \\title: “Federated SIEM”\)/);
+  assert.match(r.content, /Not in a section:\n- main\.tex: .*\[default\]/);
+});
