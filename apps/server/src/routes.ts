@@ -16,6 +16,7 @@ import { addSection, createDocument, listDocuments, pdfPathOf, renameDocuments, 
 import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, writeThroughCollab } from "./collab.ts";
 import { changesIn, withGitLock } from "./git.ts";
 import { editorName, listVersions, pendingChanges, recordEdit, restoreVersion, saveVersion } from "./versions.ts";
+import { addEntry, movePath, removePath } from "./entries.ts";
 import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
 import { addOwner, canAccess, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
@@ -179,33 +180,18 @@ export const projectRoutes = new Hono<AppEnv>()
 
   .post("/:id/entries", async (c) => {
     const { path: rel, type } = await c.req.json<{ path: string; type: "file" | "dir" }>();
-    const { existed } = await createEntry(c.req.param("id"), rel, type === "dir" ? "dir" : "file");
-    if (existed) return c.json({ ok: true, existed: true });
-    recordEdit(c.req.param("id"), rel, editorName(c.get("session")));
-    emit(c.req.param("id"), "filesVersion", Date.now());
-    return c.json({ ok: true }, 201);
+    const { existed } = await addEntry(c.req.param("id"), rel, type === "dir" ? "dir" : "file", c.get("session"));
+    return existed ? c.json({ ok: true, existed: true }) : c.json({ ok: true }, 201);
   })
 
   .post("/:id/move", async (c) => {
-    const id = c.req.param("id");
     const { from, to } = await c.req.json<{ from: string; to: string }>();
-    resolvePath(id, to);
-    await releasePath(id, from);
-    await moveEntry(id, from, to);
-    await renameDocuments(id, (p) => (p === from ? to : p.startsWith(`${from}/`) ? `${to}${p.slice(from.length)}` : p));
-    recordEdit(id, to, editorName(c.get("session")));
-    emit(id, "filesVersion", Date.now());
+    await movePath(c.req.param("id"), from, to, c.get("session"));
     return c.json({ ok: true });
   })
 
   .delete("/:id/entries", async (c) => {
-    const id = c.req.param("id"), rel = c.req.query("path")!;
-    resolvePath(id, rel);
-    await releasePath(id, rel);
-    await deleteEntry(id, rel);
-    await renameDocuments(id, (p) => (p === rel || p.startsWith(`${rel}/`) ? null : p));
-    recordEdit(id, rel, editorName(c.get("session")));
-    emit(id, "filesVersion", Date.now());
+    await removePath(c.req.param("id"), c.req.query("path")!, c.get("session"));
     return c.json({ ok: true });
   })
 

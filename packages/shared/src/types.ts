@@ -15,9 +15,13 @@ export interface Project {
   venue?: ProjectVenue;
   /** Set while Claude is turning an idea into a first draft. */
   setup?: { status: "planning" | "done" | "error"; error?: string };
+  /** How AI agents change files: type straight in like a co-author, or leave suggestions to accept. Default "suggest". */
+  agentMode?: AgentMode;
   createdAt: string;
   updatedAt: string;
 }
+
+export type AgentMode = "edit" | "suggest";
 
 export interface DocumentSettings {
   path: string;

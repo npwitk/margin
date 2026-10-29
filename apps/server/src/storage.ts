@@ -88,7 +88,7 @@ export async function createProject(name: string, template: string, author: stri
   await mkdir(path.join(dir, ".margin"), { recursive: true });
 
   const now = new Date().toISOString();
-  const project: Project = { id, name: title, mainFile: "main.tex", engine: info.engine ?? "pdflatex", createdAt: now, updatedAt: now };
+  const project: Project = { id, name: title, mainFile: "main.tex", engine: info.engine ?? "pdflatex", agentMode: "edit", createdAt: now, updatedAt: now };
   if (venue?.name) {
     project.venue = { name: venue.name.slice(0, 60), year: venue.year, deadline: venue.deadline ?? null, link: venue.link?.startsWith("https://") ? venue.link : undefined };
     project.goal = `${venue.name}${venue.year ? ` ${venue.year}` : ""}`;
@@ -112,14 +112,18 @@ export async function createProjectFromFiles(
     await writeFile(abs, f.data);
   }
   const now = new Date().toISOString();
-  const project: Project = { id, name: title, mainFile, engine, createdAt: now, updatedAt: now };
+  const project: Project = { id, name: title, mainFile, engine, agentMode: "edit", createdAt: now, updatedAt: now };
   await saveProject(project);
   await initRepo(dir, author, `Import from ${source}`);
   return project;
 }
 
-export async function updateProject(id: string, patch: Partial<Pick<Project, "name" | "mainFile" | "engine" | "goal">>): Promise<Project> {
+export async function updateProject(id: string, patch: Partial<Pick<Project, "name" | "mainFile" | "engine" | "goal" | "agentMode">>): Promise<Project> {
   const p = await getProject(id);
+  if (patch.agentMode !== undefined) {
+    if (patch.agentMode !== "edit" && patch.agentMode !== "suggest") throw new HttpError(400, "Unknown agent mode");
+    p.agentMode = patch.agentMode;
+  }
   if (patch.name !== undefined) p.name = patch.name.trim().slice(0, 120) || p.name;
   if (patch.goal !== undefined) p.goal = patch.goal.trim().slice(0, 500) || undefined;
   if (patch.mainFile !== undefined) {

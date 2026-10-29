@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Chat, ChatEntry, ChatEvent, ChatPart, ChatSummary, ChatToolStep, Session } from "@margin/shared";
-import { setAgentActivity } from "../collab.ts";
+import { finish, reporter } from "./activity.ts";
 import { DATA_DIR } from "../config.ts";
 import { listDocuments } from "../documents.ts";
 import { getProject, listFiles, projectDir } from "../storage.ts";
@@ -23,15 +23,17 @@ const MAX_STEPS = 30;
 const SYSTEM = `You are Claude, a research-writing collaborator inside Margin, a shared LaTeX workspace. Several human co-authors may be editing the same files live while you work; the person messaging you is named in their message.
 
 How you change the paper:
-- You cannot edit files directly. Use propose_edit to suggest a concrete change (it appears inline for the authors to accept), or add_comment for questions and concerns. Keep each suggestion to one focused change - a sentence, a paragraph, an equation - so it's easy to review.
-- Read a file before suggesting edits to it, and copy \`find\` text exactly from what read_file returned (without the line-number prefix). Files change under you; if a quote no longer matches, read again.
+- Work like a co-author: edit_file changes a passage, write_file creates or rewrites a file, add_section adds a section file to a document, create_folder / move_path / delete_path organise files, and save_version records a named version when a piece of work is done. Depending on the project's setting your edits are typed straight into the shared document (co-authors watch them happen and can undo them in one step) or arrive as suggestions; the tool result says which. Keep each edit_file call to one focused change - a sentence, a paragraph, an equation.
+- Use propose_edit instead when the authors should decide (claims, results, framing), and add_comment for questions and concerns.
+- Read a file before editing it, and copy \`find\` text exactly from what read_file returned (without the line-number prefix). Files change under you; if a passage no longer matches, read again.
+- Only delete files or restructure the project when asked.
 - After LaTeX edits that could break the build, or when asked to fix errors, use compile to check.
 - A project can hold several LaTeX documents (the paper, slides, a cover letter, a rebuttal…): any .tex file with a \\documentclass. The person tells you which one they're viewing. Use list_documents to see them, compile with a document to build one, and create_document to start a new one. A new document can reuse the project's .bib, macros and figures, but only from its own folder or below (LaTeX can't read ../ paths here), so put it next to the main document unless asked otherwise. Read the paper first when the new document is about it (a rebuttal, slides, a cover letter), and reuse its \\cite keys.
 - Never invent references. Cite only works already in the project's .bib files or ones you verified with web_search; when adding one, propose a complete BibTeX entry for the .bib file.
 
 How you respond:
 - Answer in the language the person writes in. Be concise and concrete; refer to places as path:line.
-- When you've left suggestions, say briefly what you suggested and why, so the authors know what to review.
+- Say briefly what you changed or suggested and why, so the authors know what to look at.
 - If a request is ambiguous or needs a decision only the authors can make (claims, results, framing), ask instead of guessing.`;
 
 const chatsDir = (projectId: string) => path.join(DATA_DIR, "chats", projectDir(projectId).split(path.sep).pop()!);
@@ -105,7 +107,7 @@ export async function runTurn(projectId: string, chatId: string, session: Sessio
   const entry: ChatEntry = { role: "assistant", parts, at: new Date().toISOString() };
   let usage = { input: 0, output: 0, cacheRead: 0 };
 
-  const status = (s: string, file?: string) => setAgentActivity(projectId, chatId, { chatId, agent: "Claude", for: session.name, status: s, file, at: Date.now() });
+  const status = reporter(projectId, chatId, "Claude", session);
   const addText = (delta: string) => {
     const last = parts.at(-1);
     if (last?.type === "text") last.text += delta;
@@ -193,7 +195,7 @@ export async function runTurn(projectId: string, chatId: string, session: Sessio
 
       const results = await Promise.all(toolUses.map(async (t): Promise<[Anthropic.Beta.BetaToolUseBlock, ToolOutcome]> => {
         send({ type: "tool_start", name: t.name, summary: t.name.replace(/_/g, " ") });
-        return [t, await runTool(t.name, t.input, { projectId, session, agentName: "Claude", status })];
+        return [t, await runTool(t.name, t.input, { projectId, session, agentName: "Claude", key: chatId, status })];
       }));
       for (const [t, r] of results) {
         const step: ChatPart = { type: "tool", name: t.name, summary: r.summary, ok: !r.isError, path: r.path, threadId: r.threadId };
@@ -226,7 +228,7 @@ export async function runTurn(projectId: string, chatId: string, session: Sessio
     chat.updatedAt = new Date().toISOString();
     await save(projectId, chat).catch(() => {});
     running.delete(chatId);
-    setAgentActivity(projectId, chatId, null);
+    finish(projectId, chatId, "Claude", session);
     send({ type: "done", usage });
   }
 }

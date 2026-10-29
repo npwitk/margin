@@ -2,7 +2,7 @@ import type {
   CheckpointFileDiff, PendingChanges,
   DocumentInfo, OutlineEntry, ConferenceEdition, ProjectVenue,
   CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
-  AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
+  AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
 export type StoredReview = Omit<PaperReview, "result"> & { status: "running" | "done" | "error"; error?: string; result?: PaperReview["result"] };
@@ -39,6 +39,7 @@ export const api = {
   createProject: (name: string, template: string, venue?: ProjectVenue) => req<Project>("/projects", json("POST", { name, template, venue })),
   conferences: (q = "") => req<ConferenceEdition[]>(`/conferences${q ? `?q=${encodeURIComponent(q)}` : ""}`),
   project: (id: string) => req<Project>(P(id)),
+  revertAgent: (id: string, key: string) => req<{ files: string[] }>(`${P(id)}/agent/revert`, json("POST", { key })),
   importZip: (file: File) => {
     const form = new FormData();
     form.set("file", file);
@@ -46,7 +47,7 @@ export const api = {
   },
   importFrom: (body: { arxiv?: string; git?: string }) => req<Project & { imported: number }>("/projects/import", json("POST", body)),
   fromIdea: (body: { idea: string; goal?: string; template?: string; members?: string[] }) => req<Project>("/ai/from-idea", json("POST", body)),
-  updateProject: (id: string, patch: Partial<{ name: string; mainFile: string; engine: Engine; goal: string }>) =>
+  updateProject: (id: string, patch: Partial<{ name: string; mainFile: string; engine: Engine; goal: string; agentMode: AgentMode }>) =>
     req<Project>(P(id), json("PATCH", patch)),
 
   files: (id: string) => req<FileEntry[]>(`${P(id)}/files`),

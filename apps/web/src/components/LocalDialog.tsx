@@ -86,7 +86,7 @@ export function LocalDialog({ projectId, session, onClose }: { projectId: string
       </div>
 
       <div className="section-label tokens-label">Connect an agent (MCP)</div>
-      <p className="muted small">Give Claude Code, Codex or any MCP client the same tools Margin's assistant has. It shows up live as “Claude Code for {session.name}”, its edits arrive as suggestions, and it can claim board tasks and answer comments. Run this inside your clone (the project is detected from the git remote), or anywhere with the flags shown.</p>
+      <p className="muted small">Give Claude Code, Codex or any MCP client the same tools Margin's assistant has. It shows up live as “Claude Code for {session.name}” with its own cursor, edits the paper directly or as suggestions (set in Share), and can create files and sections, claim board tasks and answer comments. No clone needed. Run this inside your clone (the project is detected from the git remote), or anywhere with the flags shown.</p>
       <div className="agent-tabs">
         <button className={agentTab === "claude" ? "active" : ""} onClick={() => setAgentTab("claude")}>Claude Code</button>
         <button className={agentTab === "codex" ? "active" : ""} onClick={() => setAgentTab("codex")}>Codex</button>

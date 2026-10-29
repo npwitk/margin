@@ -7,20 +7,24 @@ import { loadConfig } from "./config.js";
 /**
  * margin-mcp: lets Claude Code, Codex or any MCP client work in a Margin
  * project as a visible collaborator. The tools are the same ones Margin's
- * built-in assistant uses; they run on the Margin server, so edits arrive as
- * suggestions in everyone's live editor and the agent shows up in presence.
+ * built-in assistant uses; they run on the Margin server, so edits land in
+ * everyone's live editor (directly or as suggestions, per project) and the
+ * agent shows up in presence with its own cursor.
  */
 
 const VERSION = "0.1.0";
 
-const INSTRUCTIONS = `This connects you to a Margin project: LaTeX documents (a paper, and maybe slides, letters, a rebuttal…) that several co-authors edit live in their browsers.
+const INSTRUCTIONS = `This connects you to a Margin project: LaTeX documents (a paper, and maybe slides, letters, a rebuttal…) that several co-authors edit live in their browsers. You work on the live paper directly: no clone, no commits, nothing to push.
 
-- list_documents shows every document; compile takes the document to build; create_document starts a new one next to the paper so it can reuse the .bib, macros and figures.
-
-- Changes you propose with propose_edit appear as suggestions in the authors' editors for them to accept; add_comment leaves a note. Read a file before suggesting edits, and copy \`find\` text exactly.
-- If you're working in a local git clone, you can also edit files directly and \`git push\`; pushes merge with the authors' live edits. Prefer suggestions for prose the authors should review.
-- Use list_tasks / update_task to see who's doing what and claim a task before working on it; list_comments / reply_to_comment to address reviewer feedback.
-- The authors see your name and what you're doing while you use these tools.`;
+Work like a co-author:
+- read_file / search to look around; list_documents shows every document (paper, slides…).
+- edit_file to change a passage (copy \`find\` exactly from read_file, one focused change per call); write_file to create or rewrite a whole file; add_section to add a section file to a document; create_folder / move_path / delete_path to organise; create_document for new slides, letters, posters.
+- Co-authors watch your cursor and edits appear as you go, and can undo your whole run in one step. If the project is set to "Agents suggest", edits arrive as suggestions instead and file changes are refused; the tool result tells you.
+- Use propose_edit when the authors should decide (claims, results, framing); add_comment for questions.
+- compile after LaTeX changes that could break the build.
+- Board: list_tasks, then claim a task with update_task before working on it; create_task for follow-ups only a person can do (run an experiment, ask the advisor).
+- Comments: list_comments / reply_to_comment (resolve: true once addressed).
+- When you finish a piece of work, save_version with a one-line summary of what changed, so co-authors and the advisor can follow along.`;
 
 /** Friendly agent name from the MCP client's self-reported name. */
 function agentNameFrom(client?: string) {

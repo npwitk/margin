@@ -5,6 +5,10 @@ import { ROOM, colorFor, docName, type AgentActivity, type PresenceState, type R
 
 export interface Peer extends PresenceState {
   clientId: number;
+  /** For AI agents: their presence key, what they're doing, and files they changed directly. */
+  agentKey?: string;
+  status?: string;
+  edits?: string[];
 }
 
 /**

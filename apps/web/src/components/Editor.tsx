@@ -16,6 +16,7 @@ import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import * as Y from "yjs";
 import type { CiteOptions } from "@margin/shared";
 import type { ProjectCollab } from "../lib/collab.ts";
+import { agentCursors } from "../lib/agentCursors.ts";
 import { reviewDecorations } from "../lib/review.ts";
 
 export interface EditorHandle {
@@ -195,6 +196,7 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
           theme,
           yCollab(ytext, provider.awareness, { undoManager: um }),
           reviewDecorations(provider.document, (id) => p.current.onThreadClick(id)),
+          agentCursors(props.collab.agents, path),
           Prec.highest(keymap.of([
             { key: "Mod-s", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
             { key: "Mod-Enter", preventDefault: true, run: () => { p.current.onCompile(); return true; } },

@@ -1,15 +1,21 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { ROOM, TASK_COLUMNS, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
+import { ROOM, TASK_COLUMNS, type Engine, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
 import { emit, withDoc } from "../collab.ts";
-import { createDocument, listDocuments } from "../documents.ts";
+import { addSection, createDocument, listDocuments, updateDocument } from "../documents.ts";
 import { compileProject } from "../compile.ts";
+import { addEntry, movePath, removePath } from "../entries.ts";
 import { getProject, listFiles, resolvePath } from "../storage.ts";
+import { editorName, recordEdit, saveVersion } from "../versions.ts";
+import { applyAgentChange } from "../connect/apply.ts";
+import { beforeEdit, type CursorRange } from "./activity.ts";
 import { textFiles, textOf } from "./paper.ts";
 
 /**
- * Tools the project assistant can use. It can read anything, but it changes
- * text only by leaving suggestions and comments that a person accepts.
+ * Tools the project assistant and external agents (MCP) can use. They read
+ * anything; how they change text depends on the project's agent mode: typed
+ * straight into the live document like a co-author ("edit"), or left as
+ * suggestions a person accepts ("suggest").
  */
 
 export interface ToolContext {
@@ -17,7 +23,9 @@ export interface ToolContext {
   session: Session;
   /** Who's acting: "Claude" for the built-in assistant, or an external agent's name. */
   agentName: string;
-  status(text: string, file?: string): void;
+  /** Identifies this agent's run, for its presence and for undoing its edits. */
+  key: string;
+  status(text: string, file?: string, range?: CursorRange): void;
 }
 
 export interface ToolOutcome {
@@ -42,6 +50,15 @@ function checkPath(projectId: string, rel: string) {
   resolvePath(projectId, rel); // throws on traversal / internal folders
   if (!isTextPath(rel)) throw new Error(`${rel} isn't a text file`);
 }
+
+/** The session edits are credited to: "Claude Code (for Alice)". */
+const asAgent = (ctx: ToolContext): Session => (ctx.session.agent ? ctx.session : { ...ctx.session, agent: ctx.agentName });
+
+async function agentMode(ctx: ToolContext) {
+  return (await getProject(ctx.projectId)).agentMode ?? "suggest";
+}
+
+const SUGGEST_ONLY = "This project is set to \"Agents suggest\": file and folder changes need a person. Ask your user to make it, or to switch the project to \"Agents edit directly\" in Share settings.";
 
 function occurrences(text: string, needle: string) {
   const out: number[] = [];
@@ -70,11 +87,12 @@ const DEFS: Record<string, Def> = {
     }),
     async run(input: { path: string; start_line?: number; end_line?: number }, ctx) {
       checkPath(ctx.projectId, input.path);
-      ctx.status(`Reading ${input.path}`, input.path);
       const text = await textOf(ctx.projectId, input.path);
       if (text === null) return fail(`Couldn't read ${input.path}`, `No such file: ${input.path}`);
       const lines = text.split("\n");
       const start = Math.max(1, input.start_line ?? 1);
+      const at = lines.slice(0, start - 1).reduce((n, l) => n + l.length + 1, 0);
+      ctx.status(`Reading ${input.path}`, input.path, { from: at, to: at });
       const end = Math.min(lines.length, input.end_line ?? start + READ_LIMIT - 1, start + READ_LIMIT - 1);
       const body = lines.slice(start - 1, end).map((l, i) => `${String(start + i).padStart(5)}  ${l}`).join("\n");
       const more = end < lines.length ? `\n… ${lines.length - end} more lines (read with start_line=${end + 1})` : "";
@@ -136,6 +154,151 @@ const DEFS: Record<string, Def> = {
           : `The \`find\` text appears ${result.hits} times. Include more surrounding text so it matches once.`);
       }
       return { summary: `Suggested an edit in ${input.path}`, path: input.path, threadId: result.id, content: `Suggestion created (id ${result.id}). The authors will review it.` };
+    },
+  },
+
+  edit_file: {
+    description:
+      "Change an exact passage of a file: replace `find` with `replace`. In projects where agents edit directly (the usual setting) the change is typed into the live document at once, " +
+      "so co-authors watch it happen and history credits you; otherwise it becomes a suggestion for the authors to accept. " +
+      "`find` must match the current file text exactly (copy it from read_file without line numbers) and appear only once - include more surrounding text if needed. " +
+      "To insert, use a nearby passage as `find` and repeat it in `replace` with the new text added. Keep each call to one focused change.",
+    schema: z.object({
+      path: z.string(),
+      find: z.string().describe("Exact existing text to replace"),
+      replace: z.string().describe("Replacement text"),
+      reason: z.string().describe("One sentence saying what the change does (shown to the authors)"),
+    }),
+    async run(input: { path: string; find: string; replace: string; reason: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return DEFS.propose_edit.run(input as never, ctx);
+      checkPath(ctx.projectId, input.path);
+      if (!input.find) return fail("No edit made", "`find` is empty.");
+      if (input.find === input.replace) return fail("No edit made", "`replace` is identical to `find`.");
+      await beforeEdit(ctx.projectId, ctx.key, input.path, asAgent(ctx));
+      const result = await withDoc(ctx.projectId, input.path, asAgent(ctx), (doc) => {
+        const text = yText(doc);
+        const current = text.toString();
+        const hits = occurrences(current, input.find);
+        if (hits.length !== 1) return { hits: hits.length };
+        doc.transact(() => {
+          text.delete(hits[0], input.find.length);
+          if (input.replace) text.insert(hits[0], input.replace);
+        });
+        return { hits: 1, from: hits[0], line: lineAt(current, hits[0]) };
+      });
+      if (result.from === undefined) {
+        return fail(`Couldn't edit ${input.path}`, result.hits === 0
+          ? "The `find` text isn't in the file (it may have changed). Read the file again and copy the passage exactly."
+          : `The \`find\` text appears ${result.hits} times. Include more surrounding text so it matches once.`);
+      }
+      ctx.status(`Edited ${input.path}: ${input.reason.trim()}`, input.path, { from: result.from, to: result.from + input.replace.length, edited: true });
+      return { summary: `Edited ${input.path}:${result.line}`, path: input.path, content: `Done: ${input.path} changed at line ${result.line}. Co-authors see it now.` };
+    },
+  },
+
+  write_file: {
+    description:
+      "Create a text file (.tex, .bib, .sty, notes…) with the given content, or replace a whole existing file. For small changes to an existing file use edit_file instead. " +
+      "Replacing merges with anything co-authors typed since `based_on` (the text you read), so pass it when you rewrite a file you read earlier. " +
+      "When agents only suggest in this project, a replacement becomes suggestions; new files are created either way.",
+    schema: z.object({
+      path: z.string().describe("Project-relative path, e.g. sections/limitations.tex"),
+      content: z.string(),
+      based_on: z.string().optional().describe("The file's text as you read it, if you're replacing a file"),
+    }),
+    async run(input: { path: string; content: string; based_on?: string }, ctx) {
+      checkPath(ctx.projectId, input.path);
+      const mode = await agentMode(ctx);
+      const exists = (await textOf(ctx.projectId, input.path)) !== null;
+      if (mode === "edit" || !exists) await beforeEdit(ctx.projectId, ctx.key, input.path, asAgent(ctx));
+      ctx.status(`${exists ? "Rewriting" : "Creating"} ${input.path}`, input.path);
+      const r = await applyAgentChange(ctx.projectId, asAgent(ctx), input.path, input.based_on ?? null, input.content, mode);
+      if (r.mode === "created") {
+        recordEdit(ctx.projectId, input.path, editorName(asAgent(ctx)));
+        return { summary: `Created ${input.path}`, path: input.path, content: `Created ${input.path}.` };
+      }
+      const conflicts = r.conflicts ? ` ${r.conflicts} passage${r.conflicts === 1 ? "" : "s"} clashed with co-authors' edits and now hold both versions between <<<<<<< and >>>>>>> markers; read the file and resolve them.` : "";
+      if (r.mode === "suggest") return { summary: `Suggested ${r.suggestions ?? 0} edit${r.suggestions === 1 ? "" : "s"} to ${input.path}`, path: input.path, content: `Left ${r.suggestions ?? 0} suggestions for the authors.${conflicts}` };
+      return { summary: `Rewrote ${input.path}`, path: input.path, content: `Replaced ${input.path}.${conflicts}` };
+    },
+  },
+
+  create_folder: {
+    description: "Create a folder (e.g. figures/ or a folder for a new document). Does nothing if it already exists.",
+    schema: z.object({ path: z.string() }),
+    async run(input: { path: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Folder not created", SUGGEST_ONLY);
+      ctx.status(`Creating folder ${input.path}`);
+      const { existed } = await addEntry(ctx.projectId, input.path.replace(/\/+$/, ""), "dir", asAgent(ctx));
+      return { summary: existed ? `${input.path} already exists` : `Created folder ${input.path}`, content: existed ? "That folder already exists." : "Folder created." };
+    },
+  },
+
+  move_path: {
+    description: "Rename or move a file or folder. LaTeX \\input paths aren't rewritten: update them with edit_file afterwards.",
+    schema: z.object({ from: z.string(), to: z.string() }),
+    async run(input: { from: string; to: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Not moved", SUGGEST_ONLY);
+      await beforeEdit(ctx.projectId, ctx.key, input.from, asAgent(ctx));
+      ctx.status(`Moving ${input.from} to ${input.to}`);
+      await movePath(ctx.projectId, input.from, input.to, asAgent(ctx));
+      return { summary: `Moved ${input.from} to ${input.to}`, path: input.to, content: "Moved. Check \\input/\\include/\\includegraphics paths that pointed to the old location." };
+    },
+  },
+
+  delete_path: {
+    description: "Delete a file or folder. Only when the user asked for it; it stays in version history.",
+    schema: z.object({ path: z.string() }),
+    async run(input: { path: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Not deleted", SUGGEST_ONLY);
+      await beforeEdit(ctx.projectId, ctx.key, input.path, asAgent(ctx));
+      ctx.status(`Deleting ${input.path}`);
+      await removePath(ctx.projectId, input.path, asAgent(ctx));
+      return { summary: `Deleted ${input.path}`, content: "Deleted (recoverable from history)." };
+    },
+  },
+
+  add_section: {
+    description: "Add a section file to a LaTeX document: creates sections/<name>.tex next to it and \\input's it before the bibliography. Then write its text with edit_file.",
+    schema: z.object({ title: z.string().describe("Section name, e.g. \"Limitations\""), document: z.string().optional().describe("Document path; default: the default document") }),
+    async run(input: { title: string; document?: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Section not added", SUGGEST_ONLY);
+      const docPath = input.document ?? (await getProject(ctx.projectId)).mainFile;
+      await beforeEdit(ctx.projectId, ctx.key, docPath, asAgent(ctx));
+      ctx.status(`Adding section “${input.title}”`, docPath);
+      const file = await addSection(ctx.projectId, docPath, input.title, asAgent(ctx));
+      await beforeEdit(ctx.projectId, ctx.key, file, asAgent(ctx));
+      recordEdit(ctx.projectId, file, editorName(asAgent(ctx)));
+      emit(ctx.projectId, "filesVersion", Date.now());
+      return { summary: `Added section ${file}`, path: file, content: `Created ${file} and \\input it from ${docPath}.` };
+    },
+  },
+
+  update_document: {
+    description: "Change a document's settings: rename it in Margin, make it the default, archive or restore it, or set its engine.",
+    schema: z.object({
+      path: z.string(),
+      title: z.string().optional(),
+      make_default: z.boolean().optional(),
+      archived: z.boolean().optional(),
+      engine: z.enum(["pdflatex", "xelatex", "lualatex"]).optional(),
+    }),
+    async run(input: { path: string; title?: string; make_default?: boolean; archived?: boolean; engine?: Engine }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Document unchanged", SUGGEST_ONLY);
+      ctx.status(`Updating ${input.path}`, input.path);
+      await updateDocument(ctx.projectId, input.path, { title: input.title, makeDefault: input.make_default, archived: input.archived, engine: input.engine });
+      emit(ctx.projectId, "filesVersion", Date.now());
+      return { summary: `Updated ${input.path}`, path: input.path, content: "Document updated." };
+    },
+  },
+
+  save_version: {
+    description: "Save a named version of the project (a checkpoint in its history), e.g. after finishing a piece of work. The message says what changed, for co-authors and advisors.",
+    schema: z.object({ message: z.string().describe("Short summary, e.g. \"Rewrote related work around retrieval methods\"") }),
+    async run(input: { message: string }, ctx) {
+      ctx.status("Saving a version");
+      const cp = await saveVersion(ctx.projectId, { message: input.message.slice(0, 200), by: editorName(asAgent(ctx)), kind: "named" });
+      return { summary: cp ? `Saved version “${input.message}”` : "Nothing new to save", content: cp ? `Saved version ${cp.hash.slice(0, 8)}.` : "No changes since the last version." };
     },
   },
 

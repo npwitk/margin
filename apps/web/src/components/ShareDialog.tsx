@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ProjectAccess, Session } from "@margin/shared";
+import type { AgentMode, ProjectAccess, Session } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { relativeTime } from "../lib/time.ts";
@@ -13,8 +13,11 @@ export function ShareDialog({ projectId, session, onClose }: { projectId: string
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [agentMode, setAgentMode] = useState<AgentMode | null>(null);
+
   const refresh = () => api.access(projectId).then(setAccess).catch((e) => setError(e.message));
   useEffect(() => { void refresh(); }, [projectId]);
+  useEffect(() => { api.project(projectId).then((p) => setAgentMode(p.agentMode ?? "suggest")).catch(() => {}); }, [projectId]);
 
   const owner = access?.you?.role === "owner";
   const run = async (fn: () => Promise<unknown>) => {
@@ -84,6 +87,24 @@ export function ShareDialog({ projectId, session, onClose }: { projectId: string
                   </div>
                 ))}
               </div>
+            </>
+          )}
+          {agentMode && (
+            <>
+              <div className="section-label tokens-label">AI agents</div>
+              <div className="agent-mode">
+                {([
+                  ["edit", "Edit directly", "Claude and agents like Claude Code type into the paper like a co-author. You watch them work and can undo a run in one step."],
+                  ["suggest", "Suggest only", "Agents leave suggestions and comments; a person accepts each change. They can't create, move or delete files."],
+                ] as const).map(([mode, label, hint]) => (
+                  <label key={mode} className={`agent-mode-option ${agentMode === mode ? "on" : ""}`}>
+                    <input type="radio" name="agent-mode" checked={agentMode === mode} disabled={!owner}
+                      onChange={() => void run(async () => { setAgentMode((await api.updateProject(projectId, { agentMode: mode })).agentMode ?? mode); })} />
+                    <span><strong>{label}</strong><span className="muted small">{hint}</span></span>
+                  </label>
+                ))}
+              </div>
+              {!owner && <p className="muted small">Only owners can change this.</p>}
             </>
           )}
           {error && <p className="error small">{error}</p>}

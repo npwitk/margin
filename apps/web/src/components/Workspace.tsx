@@ -106,6 +106,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     .filter((a) => now - a.at < 10 * 60_000)
     .map((a, i) => ({
       clientId: -1 - i, user: { name: `${a.agent ?? "Claude"} for ${a.for}`, color: "#d97757", agent: true }, file: a.file ?? null, line: undefined, view: "write" as const,
+      agentKey: a.chatId, status: a.status, edits: a.edits,
     })), [agentsMap, now]);
   // Switching files clears the draft and selection, unless we're jumping to a specific thread.
   const pendingThread = useRef<string | null>(null);
@@ -480,6 +481,18 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     else if (peer.file) openFile(peer.file, peer.line);
   };
 
+  const revertAgent = async (peer: Peer) => {
+    if (!peer.agentKey || !peer.edits?.length) return;
+    const n = peer.edits.length;
+    if (!confirm(`Put back the ${n} file${n === 1 ? "" : "s"} ${peer.user.name} changed (${peer.edits.join(", ")}) as they were before it started? Edits others made to them since are undone too; everything stays in History.`)) return;
+    try {
+      const r = await api.revertAgent(projectId, peer.agentKey);
+      notify(`Undid ${peer.user.name}'s changes to ${r.files.length} file${r.files.length === 1 ? "" : "s"}`);
+    } catch (err) {
+      notify((err as Error).message);
+    }
+  };
+
   const peersByFile = useMemo(() => {
     const m = new Map<string, Peer[]>();
     [...peers, ...agentPeers].forEach((p) => { if (p.file && p.view !== "board") m.set(p.file, [...(m.get(p.file) ?? []), p]); });
@@ -651,7 +664,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           <button className={view === "review" ? "active" : ""} onClick={() => setView("review")} title="AI review">Review</button>
         </div>
         <div className="toolbar-trailing">
-          <PresenceStrip peers={[...peers, ...agentPeers]} onFollow={follow} />
+          <PresenceStrip peers={[...peers, ...agentPeers]} onFollow={follow} onRevertAgent={revertAgent} />
           {result && (
             <button className={`status-pill ${errors ? "danger" : warnings ? "warn" : "ok"}`} onClick={() => setShowProblems((s) => !s)} title="Problems and log">
               {errors ? <><Icon name="alert" size={13} />{errors} error{errors > 1 ? "s" : ""}</> :
