@@ -1,6 +1,7 @@
 import type { Session } from "@margin/shared";
 import { emit, releasePath } from "./collab.ts";
 import { renameDocuments } from "./documents.ts";
+import { renameSections } from "./sections.ts";
 import { createEntry, deleteEntry, moveEntry, resolvePath } from "./storage.ts";
 import { editorName, recordEdit } from "./versions.ts";
 
@@ -22,7 +23,9 @@ export async function movePath(projectId: string, from: string, to: string, sess
   resolvePath(projectId, to);
   await releasePath(projectId, from);
   await moveEntry(projectId, from, to);
-  await renameDocuments(projectId, (p) => (p === from ? to : p.startsWith(`${from}/`) ? `${to}${p.slice(from.length)}` : p));
+  const moved = (p: string) => (p === from ? to : p.startsWith(`${from}/`) ? `${to}${p.slice(from.length)}` : p);
+  await renameDocuments(projectId, moved);
+  await renameSections(projectId, moved);
   recordEdit(projectId, to, editorName(session));
   emit(projectId, "filesVersion", Date.now());
 }
@@ -31,7 +34,9 @@ export async function removePath(projectId: string, rel: string, session: Sessio
   resolvePath(projectId, rel);
   await releasePath(projectId, rel);
   await deleteEntry(projectId, rel);
-  await renameDocuments(projectId, (p) => (p === rel || p.startsWith(`${rel}/`) ? null : p));
+  const gone = (p: string) => (p === rel || p.startsWith(`${rel}/`) ? null : p);
+  await renameDocuments(projectId, gone);
+  await renameSections(projectId, gone);
   recordEdit(projectId, rel, editorName(session));
   emit(projectId, "filesVersion", Date.now());
 }

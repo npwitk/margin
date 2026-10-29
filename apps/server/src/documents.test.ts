@@ -128,3 +128,25 @@ test("outline follows \\input from a document in a subfolder", async () => {
     ["A", "Proofs", "paper/main.tex", 7],
   ]);
 });
+
+test("project sections are named folders that follow renames", async () => {
+  const sections = await import("./sections.ts");
+  const entries = await import("./entries.ts");
+  const p = await storage.createProject("Areas", "article", "Tester");
+  const who = { name: "Tester" };
+  const slidesA = await sections.addProjectSection(p.id, { title: "Slides" }, who);
+  assert.deepEqual(slidesA, { path: "slides", title: "Slides" });
+  // A second one with the same name gets its own folder.
+  const slidesB = await sections.addProjectSection(p.id, { title: "Slides" }, who);
+  assert.equal(slidesB.path, "slides-2");
+
+  const talk = await docs.createDocument(p.id, { title: "Talk", template: "beamer", path: "slides/talk.tex" });
+  assert.equal(talk, "slides/talk.tex");
+
+  await entries.movePath(p.id, "slides", "talks", who);
+  assert.deepEqual((await storage.getProject(p.id)).sections?.map((s) => s.path), ["talks", "slides-2"]);
+  await entries.removePath(p.id, "slides-2", who);
+  assert.deepEqual((await storage.getProject(p.id)).sections, [{ path: "talks", title: "Slides" }]);
+  await sections.removeProjectSection(p.id, "talks");
+  assert.equal((await storage.getProject(p.id)).sections, undefined);
+});

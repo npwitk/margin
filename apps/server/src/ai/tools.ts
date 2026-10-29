@@ -5,6 +5,7 @@ import { emit, withDoc } from "../collab.ts";
 import { addSection, createDocument, listDocuments, updateDocument } from "../documents.ts";
 import { compileProject } from "../compile.ts";
 import { addEntry, movePath, removePath } from "../entries.ts";
+import { addProjectSection } from "../sections.ts";
 import { getProject, listFiles, resolvePath } from "../storage.ts";
 import { editorName, recordEdit, saveVersion } from "../versions.ts";
 import { applyAgentChange } from "../connect/apply.ts";
@@ -73,7 +74,8 @@ const DEFS: Record<string, Def> = {
     async run(_input: Record<string, never>, ctx) {
       const [files, project, docs] = await Promise.all([listFiles(ctx.projectId), getProject(ctx.projectId), listDocuments(ctx.projectId)]);
       const roots = new Set(docs.map((d) => d.path));
-      const lines = files.map((f) => (f.type === "dir" ? `${f.path}/` : `${f.path} (${f.size} B)${f.path === project.mainFile ? " [default document]" : roots.has(f.path) ? " [document]" : ""}`));
+      const sections = new Map((project.sections ?? []).map((x) => [x.path, x.title]));
+      const lines = files.map((f) => (f.type === "dir" ? `${f.path}/${sections.has(f.path) ? ` [section “${sections.get(f.path)}”]` : ""}` : `${f.path} (${f.size} B)${f.path === project.mainFile ? " [default document]" : roots.has(f.path) ? " [document]" : ""}`));
       return { summary: "Listed project files", content: lines.join("\n") || "(empty project)" };
     },
   },
@@ -271,6 +273,17 @@ const DEFS: Record<string, Def> = {
       recordEdit(ctx.projectId, file, editorName(asAgent(ctx)));
       emit(ctx.projectId, "filesVersion", Date.now());
       return { summary: `Added section ${file}`, path: file, content: `Created ${file} and \\input it from ${docPath}.` };
+    },
+  },
+
+  create_project_section: {
+    description: "Create a section of the project: a named folder (e.g. \"Slides\", \"Experiments\", \"Meeting notes\") shown as its own group in everyone's file list, to put new documents and files in. This is not a LaTeX \\section (use add_section for that). Pass `path` to give an existing folder a section name instead.",
+    schema: z.object({ title: z.string(), path: z.string().optional().describe("An existing folder to turn into a section") }),
+    async run(input: { title: string; path?: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Section not created", SUGGEST_ONLY);
+      ctx.status(`Creating section “${input.title}”`);
+      const section = await addProjectSection(ctx.projectId, input, asAgent(ctx));
+      return { summary: `Created section “${section.title}”`, path: section.path, content: `Section “${section.title}” is the folder ${section.path}/. Put files there, e.g. create_document with path "${section.path}/<name>.tex".` };
     },
   },
 

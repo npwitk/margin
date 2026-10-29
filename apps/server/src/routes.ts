@@ -17,6 +17,7 @@ import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, 
 import { changesIn, withGitLock } from "./git.ts";
 import { editorName, listVersions, pendingChanges, recordEdit, restoreVersion, saveVersion } from "./versions.ts";
 import { addEntry, movePath, removePath } from "./entries.ts";
+import { addProjectSection, removeProjectSection, updateProjectSection } from "./sections.ts";
 import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
 import { addOwner, canAccess, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
@@ -244,6 +245,24 @@ export const projectRoutes = new Hono<AppEnv>()
     recordEdit(id, file, editorName(c.get("session")));
     emit(id, "filesVersion", Date.now());
     return c.json({ path: file, documents: await listDocuments(id) }, 201);
+  })
+  // ── Sections: named folders (Paper, Slides, Notes…) shown as groups in the file list ──
+  .post("/:id/sections", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ title: string; path?: string }>();
+    const section = await addProjectSection(id, body, c.get("session"));
+    return c.json({ section, project: await getProject(id) }, 201);
+  })
+  .patch("/:id/sections", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ path: string; title?: string; index?: number }>();
+    await updateProjectSection(id, body.path, body);
+    return c.json(await getProject(id));
+  })
+  .delete("/:id/sections", async (c) => {
+    const id = c.req.param("id");
+    await removeProjectSection(id, c.req.query("path")!);
+    return c.json(await getProject(id));
   })
   .patch("/:id/documents", async (c) => {
     const id = c.req.param("id");

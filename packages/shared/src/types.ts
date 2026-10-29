@@ -15,6 +15,8 @@ export interface Project {
   venue?: ProjectVenue;
   /** Set while Claude is turning an idea into a first draft. */
   setup?: { status: "planning" | "done" | "error"; error?: string };
+  /** Named areas of the project (Paper, Slides, Notes…), each a folder, shown as groups in the file list. */
+  sections?: ProjectSection[];
   /** How AI agents change files: type straight in like a co-author, or leave suggestions to accept. Default "suggest". */
   agentMode?: AgentMode;
   createdAt: string;
@@ -22,6 +24,12 @@ export interface Project {
 }
 
 export type AgentMode = "edit" | "suggest";
+
+/** A part of the project people put files in, e.g. "Slides" → folder slides/. Not a LaTeX \section. */
+export interface ProjectSection {
+  path: string;
+  title: string;
+}
 
 export interface DocumentSettings {
   path: string;

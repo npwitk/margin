@@ -2,7 +2,7 @@ import type {
   CheckpointFileDiff, PendingChanges,
   DocumentInfo, OutlineEntry, ConferenceEdition, ProjectVenue,
   CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
-  AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, Session, SyncTexForward, SyncTexInverse,
+  AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, ProjectSection, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
 export type StoredReview = Omit<PaperReview, "result"> & { status: "running" | "done" | "error"; error?: string; result?: PaperReview["result"] };
@@ -77,6 +77,9 @@ export const api = {
   outline: (id: string, doc?: string) => req<{ doc: string; entries: OutlineEntry[] }>(`${P(id)}/outline${doc ? `?doc=${q(doc)}` : ""}`),
   createDocument: (id: string, body: { title?: string; template?: string; path?: string; layout?: "folder" | "beside"; copyFrom?: string }) =>
     req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("POST", body)),
+  createArea: (id: string, title: string, path?: string) => req<{ section: ProjectSection; project: Project }>(`${P(id)}/sections`, json("POST", { title, path })),
+  updateArea: (id: string, path: string, patch: { title?: string; index?: number }) => req<Project>(`${P(id)}/sections`, json("PATCH", { path, ...patch })),
+  removeArea: (id: string, path: string) => req<Project>(`${P(id)}/sections?path=${q(path)}`, { method: "DELETE" }),
   addSection: (id: string, doc: string, title: string) => req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents/section`, json("POST", { doc, title })),
   updateDocument: (id: string, body: { path: string; engine?: Engine; title?: string; makeDefault?: boolean; archived?: boolean }) =>
     req<{ project: Project; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("PATCH", body)),
