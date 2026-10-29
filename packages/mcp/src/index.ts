@@ -12,7 +12,7 @@ import { loadConfig } from "./config.js";
  * agent shows up in presence with its own cursor.
  */
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const INSTRUCTIONS = `This connects you to a Margin project: LaTeX documents (a paper, and maybe slides, letters, a rebuttal…) that several co-authors edit live in their browsers. You work on the live paper directly: no clone, no commits, nothing to push.
 

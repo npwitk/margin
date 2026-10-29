@@ -177,7 +177,6 @@ env = { MARGIN_TOKEN = "${token}" }`}</pre>
         </>
       )}
 
-      {mode !== "git" && <p className="muted small">Until margin-paper-mcp is on npm, use <code>node &lt;margin repo&gt;/packages/mcp/dist/{mode === "agent" ? "index" : "cli"}.js</code> in place of <code>{mode === "agent" ? "npx -y margin-paper-mcp" : cli}</code>.</p>}
       {error && <p className="error small">{error}</p>}
       <div className="section-label tokens-label">Your tokens</div>
       <div className="token-list">

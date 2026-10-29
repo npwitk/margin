@@ -1,6 +1,6 @@
 # margin-paper-mcp
 
-Connect **Claude Code, Codex, Cursor** or any MCP client to a [Margin](https://github.com/YOUR-ORG/margin) project, the open-source collaborative LaTeX workspace.
+Connect **Claude Code, Codex, Cursor** or any MCP client to a [Margin](https://github.com/npwitk/margin) project, the open-source collaborative LaTeX workspace.
 
 Your agent works on the live paper like a co-author, with nothing to download or push. It can:
 - read and search
