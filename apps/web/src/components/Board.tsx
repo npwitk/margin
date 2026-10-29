@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { TASK_COLUMNS, TASK_PRIORITIES, assigneesOf, withAssignees, type FileEntry, type Session, type Task, type TaskPriority, type TaskStatus } from "@margin/shared";
+import {
+  COLUMN_TONES, TASK_PRIORITIES, assigneesOf, boardColumns, columnOf, toneOf, withAssignees,
+  type ColumnKind, type FileEntry, type Session, type Task, type TaskColumn, type TaskPriority, type TaskStatus,
+} from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { rememberAvatars } from "../lib/avatars.ts";
 import { useYMap, type Peer, type ProjectCollab } from "../lib/collab.ts";
@@ -62,6 +65,15 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
   const [adding, setAdding] = useState<TaskStatus | null>(null);
   const [mine, setMine] = useState(false);
   const [drag, setDrag] = useState<{ id: string; over?: string; column?: TaskStatus } | null>(null);
+  const boardMap = useYMap(collab.board);
+  const columns = boardColumns(boardMap.get("columns"));
+  const kindOf = (t: Task) => columnOf(columns, t.status).kind;
+  const setColumns = (next: TaskColumn[]) => collab.board.set("columns", next);
+  const [columnMenu, setColumnMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [addingColumn, setAddingColumn] = useState(false);
+  const [removing, setRemoving] = useState<TaskColumn | null>(null);
+  const [dragColumn, setDragColumn] = useState<{ id: string; over?: string } | null>(null);
 
   // GitHub pictures of the project's members (stored in the room by each person's browser).
   useEffect(() => { rememberAvatars([...membersMap].map(([name, m]) => [name, m.avatar])); }, [membersMap]);
@@ -93,7 +105,31 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
   }, [projectMembers, membersMap, peers, tasksMap, session.name]);
   const allLabels = useMemo(() => [...new Set([...tasksMap.values()].flatMap((t) => t.labels ?? []))].sort(), [tasksMap]);
 
-  const column = (status: TaskStatus) => tasks.filter((t) => t.status === status).sort((a, b) => a.order - b.order);
+  // A task whose column was removed shows in the first column.
+  const column = (status: TaskStatus) => tasks.filter((t) => columnOf(columns, t.status).id === status).sort((a, b) => a.order - b.order);
+
+  const patchColumn = (id: string, patch: Partial<TaskColumn>) => setColumns(columns.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  const moveColumn = (id: string, to: number) => {
+    const rest = columns.filter((c) => c.id !== id);
+    rest.splice(Math.max(0, Math.min(to, rest.length)), 0, columns.find((c) => c.id === id)!);
+    setColumns(rest);
+  };
+  const addColumn = (label: string) => {
+    const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "column";
+    let id = base, n = 2;
+    while (columns.some((c) => c.id === id)) id = `${base}-${n++}`;
+    const doneAt = columns.findIndex((c) => c.kind === "done");
+    const at = doneAt >= 0 ? doneAt : columns.length;
+    setColumns([...columns.slice(0, at), { id, label: label.slice(0, 40), kind: "active", tone: "review" }, ...columns.slice(at)]);
+  };
+  /** Remove a column, moving its tasks to `into`. */
+  const removeColumn = (c: TaskColumn, into?: string) => {
+    const target = into ?? columns.find((x) => x.id !== c.id)!.id;
+    collab.tasks.doc!.transact(() => {
+      for (const t of [...tasksMap.values()]) if (columnOf(columns, t.status).id === c.id) collab.tasks.set(t.id, { ...t, status: target, updatedAt: now() });
+      setColumns(columns.filter((x) => x.id !== c.id));
+    });
+  };
 
   const update = (task: Task, patch: Partial<Task>) => collab.tasks.set(task.id, { ...task, ...patch, updatedAt: now() });
 
@@ -129,7 +165,7 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
     <div className="board">
       <div className="team">
         {members.map((name) => {
-          const doing = [...tasksMap.values()].filter((t) => assigneesOf(t).includes(name) && (t.status === "doing" || t.status === "review"));
+          const doing = [...tasksMap.values()].filter((t) => assigneesOf(t).includes(name) && kindOf(t) === "active");
           const here = name === session.name || peers.some((p) => p.user.name === name);
           const file = name === session.name ? null : liveFile(name);
           return (
@@ -160,29 +196,46 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
       </div>
 
       <div className="columns">
-        {TASK_COLUMNS.map((c) => {
+        {columns.map((c, ci) => {
           const items = column(c.id);
           return (
             <section
               key={c.id}
-              className={`column ${drag?.column === c.id && !drag.over ? "drop" : ""}`}
-              onDragOver={(e) => { e.preventDefault(); if (drag) setDrag({ ...drag, column: c.id, over: undefined }); }}
-              onDrop={(e) => { e.preventDefault(); drop(c.id); }}
+              className={`column ${drag?.column === c.id && !drag.over ? "drop" : ""} ${dragColumn?.over === c.id ? "column-drop" : ""} ${dragColumn?.id === c.id ? "dragging" : ""}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (dragColumn) { if (dragColumn.over !== c.id) setDragColumn({ ...dragColumn, over: c.id }); return; }
+                if (drag) setDrag({ ...drag, column: c.id, over: undefined });
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragColumn) { if (dragColumn.id !== c.id) moveColumn(dragColumn.id, ci); setDragColumn(null); return; }
+                drop(c.id);
+              }}
             >
-              <header className="column-head">
-                <span className={`status-dot st-${c.id}`} />
-                <span className="column-title">{c.label}</span>
+              <header className="column-head" draggable={renaming !== c.id}
+                onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c.label); setDragColumn({ id: c.id }); }}
+                onDragEnd={() => setDragColumn(null)}
+                title="Drag to reorder · double-click to rename">
+                <span className={`status-dot st-${toneOf(c)}`} />
+                {renaming === c.id ? (
+                  <input className="bare column-rename" autoFocus defaultValue={c.label}
+                    onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== c.label) patchColumn(c.id, { label: v.slice(0, 40) }); setRenaming(null); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setRenaming(null); }} />
+                ) : <span className="column-title" onDoubleClick={() => setRenaming(c.id)}>{c.label}</span>}
                 <span className="count">{items.length}</span>
                 <div className="spacer" />
+                <button className="icon-btn" title="Column options" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setColumnMenu({ id: c.id, x: Math.min(r.left, window.innerWidth - 240), y: r.bottom + 4 }); }}><Icon name="ellipsis" size={14} /></button>
                 <button className="icon-btn" title="Add task" onClick={() => setAdding(c.id)}><Icon name="plus" size={14} /></button>
               </header>
               <div className="cards">
                 {items.map((t) => {
-                  const overdue = !!t.due && t.status !== "done" && t.due < today();
+                  const finished = kindOf(t) === "done";
+                  const overdue = !!t.due && !finished && t.due < today();
                   return (
                     <article
                       key={t.id}
-                      className={`task-card ${drag?.over === t.id ? "drop-before" : ""} ${drag?.id === t.id ? "dragging" : ""} ${t.status === "done" ? "is-done" : ""}`}
+                      className={`task-card ${drag?.over === t.id ? "drop-before" : ""} ${drag?.id === t.id ? "dragging" : ""} ${finished ? "is-done" : ""}`}
                       draggable
                       onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDrag({ id: t.id }); }}
                       onDragEnd={() => setDrag(null)}
@@ -201,8 +254,8 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
                         </div>
                       )}
                       <div className="task-card-foot">
-                        <span className={`type-icon ${t.status === "done" ? "done" : ""}`}><Icon name="check" size={10} /></span>
-                        <span className={`task-key ${t.status === "done" ? "done" : ""}`}>{keyOf(t)}</span>
+                        <span className={`type-icon ${finished ? "done" : ""}`}><Icon name="check" size={10} /></span>
+                        <span className={`task-key ${finished ? "done" : ""}`}>{keyOf(t)}</span>
                         <PriorityIcon priority={t.priority} />
                         {t.due && <span className={`due ${overdue ? "overdue" : ""}`} title={overdue ? "Overdue" : "Due"}><Icon name="calendar" size={11} />{new Date(`${t.due}T00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
                         {!!t.notes?.trim() && <span className="muted" title="Has a description"><Icon name="lines" size={12} /></span>}
@@ -232,12 +285,62 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
             </section>
           );
         })}
+        <div className="column-new">
+          {addingColumn ? (
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const input = e.currentTarget.elements.namedItem("label") as HTMLInputElement;
+              if (input.value.trim()) addColumn(input.value.trim());
+              setAddingColumn(false);
+            }}>
+              <input name="label" className="input" autoFocus placeholder="Column name, e.g. Blocked" onBlur={(e) => { if (e.target.value.trim()) addColumn(e.target.value.trim()); setAddingColumn(false); }}
+                onKeyDown={(e) => e.key === "Escape" && setAddingColumn(false)} />
+            </form>
+          ) : <button className="column-add" onClick={() => setAddingColumn(true)}><Icon name="plus" size={13} />Add column</button>}
+        </div>
       </div>
+
+      {columnMenu && (() => {
+        const c = columns.find((x) => x.id === columnMenu.id);
+        if (!c) return null;
+        const i = columns.indexOf(c);
+        const close = () => setColumnMenu(null);
+        const kinds: [ColumnKind, string][] = [["todo", "Not started"], ["active", "In progress"], ["done", "Finished"]];
+        return (
+          <>
+            <div className="menu-backdrop" onClick={close} />
+            <div className="menu column-menu" style={{ left: columnMenu.x, top: columnMenu.y }}>
+              <button onClick={() => { close(); setRenaming(c.id); }}><Icon name="file" size={14} />Rename</button>
+              <div className="menu-label">Colour</div>
+              <div className="tone-row">
+                {COLUMN_TONES.map((t) => (
+                  <button key={t.id} className={`tone-swatch st-${t.id} ${toneOf(c) === t.id ? "on" : ""}`} title={t.label} onClick={() => patchColumn(c.id, { tone: t.id })}><span className={`status-dot st-${t.id}`} /></button>
+                ))}
+              </div>
+              <div className="menu-label">Tasks here are</div>
+              {kinds.map(([k, label]) => (
+                <button key={k} onClick={() => patchColumn(c.id, { kind: k })}><Icon name={c.kind === k ? "check" : "minus"} size={14} />{label}</button>
+              ))}
+              <div className="menu-sep" />
+              <button disabled={i === 0} onClick={() => { close(); moveColumn(c.id, i - 1); }}><Icon name="back" size={14} />Move left</button>
+              <button disabled={i === columns.length - 1} onClick={() => { close(); moveColumn(c.id, i + 1); }}><Icon name="chevron" size={14} />Move right</button>
+              <div className="menu-sep" />
+              <button className="danger" disabled={columns.length === 1} onClick={() => { close(); if (column(c.id).length) setRemoving(c); else removeColumn(c); }}><Icon name="x" size={14} />Delete column</button>
+            </div>
+          </>
+        );
+      })()}
+
+      {removing && (
+        <RemoveColumnDialog column={removing} count={column(removing.id).length} columns={columns.filter((c) => c.id !== removing.id)}
+          onRemove={(into) => { removeColumn(removing, into); setRemoving(null); }} onClose={() => setRemoving(null)} />
+      )}
 
       {editingTask && (
         <TaskDialog
           task={editingTask}
           taskKey={keyOf(editingTask)}
+          columns={columns}
           members={members}
           labels={allLabels}
           files={files.filter((f) => f.type === "file").map((f) => f.path)}
@@ -253,11 +356,29 @@ export function Board({ collab, session, files, peers, projectName, onOpenFile }
   );
 }
 
-function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChange, onDelete, onClose, collab, session }: {
+function RemoveColumnDialog({ column, count, columns, onRemove, onClose }: { column: TaskColumn; count: number; columns: TaskColumn[]; onRemove(into: string): void; onClose(): void }) {
+  const [into, setInto] = useState(columns[0].id);
+  return (
+    <Modal onClose={onClose}>
+      <h3 className="modal-title">Delete “{column.label}”?</h3>
+      <p className="muted small">It has {count} task{count === 1 ? "" : "s"}. Move {count === 1 ? "it" : "them"} to:</p>
+      <select value={into} onChange={(e) => setInto(e.target.value)}>
+        {columns.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+      </select>
+      <div className="modal-actions">
+        <button className="btn ghost" onClick={onClose}>Cancel</button>
+        <button className="btn danger" onClick={() => onRemove(into)}>Delete column</button>
+      </div>
+    </Modal>
+  );
+}
+
+function TaskDialog({ task, taskKey, columns, members, labels, files, onOpenFile, onChange, onDelete, onClose, collab, session }: {
   collab: ProjectCollab;
   session: Session;
   task: Task;
   taskKey: string;
+  columns: TaskColumn[];
   members: string[];
   labels: string[];
   files: string[];
@@ -287,7 +408,7 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
   return (
     <Modal onClose={close} className="task-modal">
       <div className="task-modal-head">
-        <span className={`type-icon ${task.status === "done" ? "done" : ""}`}><Icon name="check" size={10} /></span>
+        <span className={`type-icon ${columnOf(columns, task.status).kind === "done" ? "done" : ""}`}><Icon name="check" size={10} /></span>
         <span className="task-key">{taskKey}</span>
         <div className="spacer" />
         <button className="icon-btn" onClick={close} title="Close"><Icon name="x" /></button>
@@ -320,8 +441,8 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
         </div>
 
         <aside className="task-side">
-          <select className={`status-select st-${task.status}`} value={task.status} onChange={(e) => onChange({ status: e.target.value as TaskStatus })} aria-label="Status">
-            {TASK_COLUMNS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+          <select className={`status-select st-${toneOf(columnOf(columns, task.status))}`} value={columnOf(columns, task.status).id} onChange={(e) => onChange({ status: e.target.value })} aria-label="Status">
+            {columns.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
 
           <div className="task-details">
@@ -343,7 +464,7 @@ function TaskDialog({ task, taskKey, members, labels, files, onOpenFile, onChang
             <div className="detail-row">
               <span className="detail-label">Due date</span>
               <div className="detail-value">
-                <input type="date" className={`bare-select ${task.due && task.status !== "done" && task.due < today() ? "overdue" : ""}`} value={task.due ?? ""} onChange={(e) => onChange({ due: e.target.value || undefined })} />
+                <input type="date" className={`bare-select ${task.due && columnOf(columns, task.status).kind !== "done" && task.due < today() ? "overdue" : ""}`} value={task.due ?? ""} onChange={(e) => onChange({ due: e.target.value || undefined })} />
               </div>
             </div>
             <div className="detail-row top">

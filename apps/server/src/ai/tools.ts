@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type * as Y from "yjs";
 import { z } from "zod";
-import { ROOM, TASK_COLUMNS, type Engine, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
+import { ROOM, boardColumns, columnOf, firstColumn, type Engine, type TaskColumn, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
 import { emit, withDoc } from "../collab.ts";
 import { addSection, createDocument, listDocuments, updateDocument } from "../documents.ts";
 import { compileProject } from "../compile.ts";
@@ -60,6 +61,23 @@ async function agentMode(ctx: ToolContext) {
 }
 
 const SUGGEST_ONLY = "This project is set to \"Agents suggest\": file and folder changes need a person. Ask your user to make it, or to switch the project to \"Agents edit directly\" in Share settings.";
+
+function columnsIn(doc: Y.Doc) {
+  return boardColumns(doc.getMap<TaskColumn[]>("board").get("columns"));
+}
+
+/** A column by id or (case-insensitive) name. */
+function findColumn(columns: TaskColumn[], ref: string) {
+  const r = ref.trim().toLowerCase();
+  return columns.find((c) => c.id === ref) ?? columns.find((c) => c.label.toLowerCase() === r);
+}
+
+export function columnId(label: string, columns: TaskColumn[]) {
+  const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "column";
+  let id = base, n = 2;
+  while (columns.some((c) => c.id === id)) id = `${base}-${n++}`;
+  return id;
+}
 
 function occurrences(text: string, needle: string) {
   const out: number[] = [];
@@ -381,67 +399,101 @@ const DEFS: Record<string, Def> = {
   },
 
   list_tasks: {
-    description: "Show the project board: tasks, their status, assignee and linked files.",
+    description: "Show the project board: its columns, and the tasks in each with status, assignees and linked files.",
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
-      const tasks = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => [...doc.getMap<Task>("tasks").values()]);
-      const content = TASK_COLUMNS.map((c) => {
-        const items = tasks.filter((t) => t.status === c.id).sort((a, b) => a.order - b.order);
-        return `${c.label}:\n${items.map((t) => `- [${t.id.slice(0, 8)}] ${t.title}${assigneesOf(t).length ? ` (${assigneesOf(t).map((a) => `@${a}`).join(", ")})` : ""}${t.files?.length ? ` files: ${t.files.join(", ")}` : ""}`).join("\n") || "- (none)"}`;
+      const { tasks, columns } = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => ({ tasks: [...doc.getMap<Task>("tasks").values()], columns: columnsIn(doc) }));
+      const content = columns.map((c) => {
+        const items = tasks.filter((t) => columnOf(columns, t.status).id === c.id).sort((a, b) => a.order - b.order);
+        return `${c.label} [status "${c.id}", ${c.kind === "active" ? "in progress" : c.kind === "done" ? "finished" : "not started"}]:\n${items.map((t) => `- [${t.id.slice(0, 8)}] ${t.title}${assigneesOf(t).length ? ` (${assigneesOf(t).map((a) => `@${a}`).join(", ")})` : ""}${t.files?.length ? ` files: ${t.files.join(", ")}` : ""}`).join("\n") || "- (none)"}`;
       }).join("\n\n");
       return { summary: "Checked the board", content };
     },
   },
 
   create_task: {
-    description: "Add a task to the project board's To do column (e.g. follow-ups you can't do yourself, like running an experiment).",
+    description: "Add a task to the project board (its first not-started column unless you name one), e.g. follow-ups you can't do yourself, like running an experiment.",
     schema: z.object({
       title: z.string(),
       assignee: z.string().optional().describe("Member name, if the user asked to assign it"),
       files: z.array(z.string()).optional(),
       notes: z.string().optional(),
+      status: z.string().optional().describe("Column id or name from list_tasks"),
     }),
-    async run(input: { title: string; assignee?: string; files?: string[]; notes?: string }, ctx) {
-      const task = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
+    async run(input: { title: string; assignee?: string; files?: string[]; notes?: string; status?: string }, ctx) {
+      const result = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
         const tasks = doc.getMap<Task>("tasks");
-        const order = Math.max(0, ...[...tasks.values()].filter((t) => t.status === "todo").map((t) => t.order)) + 1;
+        const columns = columnsIn(doc);
+        const column = input.status ? findColumn(columns, input.status) : firstColumn(columns);
+        if (!column) return { error: `No column “${input.status}”. Columns: ${columns.map((c) => c.label).join(", ")}.` };
+        const order = Math.max(0, ...[...tasks.values()].filter((t) => t.status === column.id).map((t) => t.order)) + 1;
+        const number = Math.max(0, ...[...tasks.values()].map((t) => t.number ?? 0)) + 1;
         const now = new Date().toISOString();
         const t: Task = {
-          id: crypto.randomUUID(), title: input.title.slice(0, 200), status: "todo", order,
+          id: crypto.randomUUID(), title: input.title.slice(0, 200), status: column.id, order, number,
           ...(input.assignee ? withAssignees([input.assignee]) : {}), files: input.files?.filter((f) => isTextPath(f) || f.includes(".")), notes: input.notes,
           createdBy: `${ctx.agentName} (for ${ctx.session.name})`, createdAt: now, updatedAt: now,
         };
         tasks.set(t.id, t);
-        return t;
+        return { task: t, column };
       });
-      return { summary: `Added task “${task.title}”`, content: `Task created (id ${task.id.slice(0, 8)}).` };
+      if (!result.task) return fail("Couldn't add the task", result.error!);
+      return { summary: `Added task “${result.task.title}” to ${result.column.label}`, content: `Task created (id ${result.task.id.slice(0, 8)}).` };
     },
   },
 
   update_task: {
-    description: "Update a board task: claim it (assign it and move it to In progress), move it between columns, or add a note. Use the id shown by list_tasks (a prefix is enough).",
+    description: "Update a board task: claim it (assign it and move it to an in-progress column), move it between columns, or add a note. Use the id shown by list_tasks (a prefix is enough).",
     schema: z.object({
       id: z.string(),
-      status: z.enum(["todo", "doing", "review", "done"]).optional(),
+      status: z.string().optional().describe("Column id or name from list_tasks, e.g. \"doing\" or \"In progress\""),
       assignee: z.string().optional().describe("Member name to add as an assignee; use your user's name to claim it"),
       note: z.string().optional().describe("Appended to the task's notes"),
     }),
-    async run(input: { id: string; status?: Task["status"]; assignee?: string; note?: string }, ctx) {
+    async run(input: { id: string; status?: string; assignee?: string; note?: string }, ctx) {
       const result = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
         const tasks = doc.getMap<Task>("tasks");
+        const columns = columnsIn(doc);
         const matches = [...tasks.values()].filter((t) => t.id.startsWith(input.id));
         if (matches.length !== 1) return { error: matches.length ? "That id matches several tasks; use more characters." : "No task with that id." };
+        const column = input.status ? findColumn(columns, input.status) : undefined;
+        if (input.status && !column) return { error: `No column “${input.status}”. Columns: ${columns.map((c) => `${c.label} (${c.id})`).join(", ")}.` };
         const t = matches[0];
         const stamp = new Date().toISOString();
         const notes = input.note ? `${t.notes ? `${t.notes}\n\n` : ""}${input.note.trim()} (${ctx.agentName} for ${ctx.session.name}, ${stamp.slice(0, 10)})` : t.notes;
         const people = assigneesOf(t);
-        const next: Task = { ...t, status: input.status ?? t.status, ...(input.assignee && !people.includes(input.assignee) ? withAssignees([...people, input.assignee]) : {}), notes, updatedAt: stamp };
+        const next: Task = { ...t, status: column?.id ?? t.status, ...(input.assignee && !people.includes(input.assignee) ? withAssignees([...people, input.assignee]) : {}), notes, updatedAt: stamp };
         tasks.set(t.id, next);
-        return { task: next };
+        return { task: next, label: columnOf(columns, next.status).label };
       });
       if (!result.task) return fail("Couldn't update the task", result.error!);
-      const col = TASK_COLUMNS.find((c) => c.id === result.task.status)?.label;
-      return { summary: `Updated task “${result.task.title}” (${col}${assigneesOf(result.task).length ? `, ${assigneesOf(result.task).map((a) => `@${a}`).join(" ")}` : ""})`, content: "Task updated." };
+      return { summary: `Updated task “${result.task.title}” (${result.label}${assigneesOf(result.task).length ? `, ${assigneesOf(result.task).map((a) => `@${a}`).join(" ")}` : ""})`, content: "Task updated." };
+    },
+  },
+
+  add_board_column: {
+    description: "Add a column to the project board, e.g. \"Blocked\" or \"Waiting for advisor\". Only when the user asks for it.",
+    schema: z.object({
+      label: z.string(),
+      kind: z.enum(["todo", "active", "done"]).optional().describe("not started, in progress (default) or finished"),
+      after: z.string().optional().describe("Put it after this column (id or name); default: before the finished columns"),
+    }),
+    async run(input: { label: string; kind?: TaskColumn["kind"]; after?: string }, ctx) {
+      const label = input.label.trim().slice(0, 40);
+      if (!label) return fail("No column added", "Give the column a name.");
+      const columns = await withDoc(ctx.projectId, ROOM, ctx.session, (doc) => {
+        const current = columnsIn(doc);
+        if (findColumn(current, label)) return null;
+        const column: TaskColumn = { id: columnId(label, current), label, kind: input.kind ?? "active" };
+        const after = input.after ? current.findIndex((c) => c === findColumn(current, input.after!)) : -1;
+        const doneAt = current.findIndex((c) => c.kind === "done");
+        const at = after >= 0 ? after + 1 : doneAt >= 0 ? doneAt : current.length;
+        const next = [...current.slice(0, at), column, ...current.slice(at)];
+        doc.getMap<TaskColumn[]>("board").set("columns", next);
+        return next;
+      });
+      if (!columns) return fail("No column added", `There's already a column called “${label}”.`);
+      return { summary: `Added board column “${label}”`, content: `Columns now: ${columns.map((c) => c.label).join(" → ")}.` };
     },
   },
 

@@ -63,3 +63,22 @@ test("agents can add sections and folders", async () => {
   const main = await readFile(path.join(storage.projectDir(p.id), "main.tex"), "utf8");
   assert.match(main, /\\input\{sections\/limitations\}/);
 });
+
+test("board tools follow the project's own columns", async () => {
+  const p = await storage.createProject("Board", "article", "Alice");
+  const added = await runTool("add_board_column", { label: "Blocked", kind: "active" }, ctx(p.id));
+  assert.ok(!added.isError, added.content);
+  assert.match(added.content, /To do → In progress → In review → Blocked → Done/);
+  const made = await runTool("create_task", { title: "Run ablation" }, ctx(p.id));
+  const id = made.content.match(/id ([0-9a-f]{8})/)![1];
+  const moved = await runTool("update_task", { id, status: "blocked" }, ctx(p.id));
+  assert.ok(!moved.isError, moved.content);
+  assert.match(moved.summary, /Blocked/);
+  const bad = await runTool("update_task", { id, status: "Nope" }, ctx(p.id));
+  assert.ok(bad.isError);
+  const list = await runTool("list_tasks", {}, ctx(p.id));
+  assert.match(list.content, /Blocked \[status "blocked", in progress\]:\n- \[[0-9a-f]{8}\] Run ablation/);
+  await flushProject(p.id);
+  const board = JSON.parse(await readFile(path.join(storage.projectDir(p.id), ".margin/board.json"), "utf8"));
+  assert.deepEqual(board.columns.map((c: { id: string }) => c.id), ["todo", "doing", "review", "blocked", "done"]);
+});

@@ -233,14 +233,43 @@ export function isTextPath(path: string): boolean {
 
 // ── Collaboration (P1) ──────────────────────────────────────────────────────
 
-export type TaskStatus = "todo" | "doing" | "review" | "done";
+/** A board column's id. The defaults are "todo", "doing", "review" and "done"; projects can add their own. */
+export type TaskStatus = string;
 
-export const TASK_COLUMNS: { id: TaskStatus; label: string }[] = [
-  { id: "todo", label: "To do" },
-  { id: "doing", label: "In progress" },
-  { id: "review", label: "In review" },
-  { id: "done", label: "Done" },
+/** What a column means: not started, being worked on, or finished (done tasks aren't overdue). */
+export type ColumnKind = "todo" | "active" | "done";
+/** A column's colour. */
+export type ColumnTone = "todo" | "doing" | "review" | "done" | "red" | "purple";
+
+export interface TaskColumn {
+  id: TaskStatus;
+  label: string;
+  kind: ColumnKind;
+  tone?: ColumnTone;
+}
+
+export const TASK_COLUMNS: TaskColumn[] = [
+  { id: "todo", label: "To do", kind: "todo", tone: "todo" },
+  { id: "doing", label: "In progress", kind: "active", tone: "doing" },
+  { id: "review", label: "In review", kind: "active", tone: "review" },
+  { id: "done", label: "Done", kind: "done", tone: "done" },
 ];
+
+export const COLUMN_TONES: { id: ColumnTone; label: string }[] = [
+  { id: "todo", label: "Grey" }, { id: "doing", label: "Amber" }, { id: "review", label: "Blue" },
+  { id: "done", label: "Green" }, { id: "red", label: "Red" }, { id: "purple", label: "Purple" },
+];
+
+/** The board's columns: the project's own, or the defaults. */
+export const boardColumns = (stored?: TaskColumn[] | null): TaskColumn[] => (stored?.length ? stored : TASK_COLUMNS);
+
+/** The column a task shows in: its own, or the first one if its column was removed. */
+export const columnOf = (columns: TaskColumn[], status: TaskStatus): TaskColumn => columns.find((c) => c.id === status) ?? columns[0];
+
+/** Where new tasks go: the first not-started column. */
+export const firstColumn = (columns: TaskColumn[]): TaskColumn => columns.find((c) => c.kind === "todo") ?? columns[0];
+
+export const toneOf = (c: TaskColumn): ColumnTone => c.tone ?? (c.kind === "done" ? "done" : c.kind === "active" ? "doing" : "todo");
 
 /** Everyone assigned to a task (older tasks only have `assignee`). */
 export const assigneesOf = (t: Pick<Task, "assignee" | "assignees">): string[] => t.assignees?.length ? t.assignees : t.assignee ? [t.assignee] : [];

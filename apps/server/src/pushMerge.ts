@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import * as Y from "yjs";
-import { ROOM, isTextPath, type Task } from "@margin/shared";
+import { ROOM, isTextPath, type Task, type TaskColumn } from "@margin/shared";
 import { applyText, dropDoc, emit, liveDoc, mergeIntoLive } from "./collab.ts";
 import { projectDir } from "./storage.ts";
 
@@ -42,14 +42,21 @@ export async function merge3(ours: string, base: string, theirs: string): Promis
   }
 }
 
-/** Board: per task, a pushed change wins over the base; otherwise keep the live version. */
-function mergeBoard(fork: Y.Doc, base: Task[], theirs: Task[]) {
+interface BoardFile { tasks?: Task[]; columns?: TaskColumn[] }
+
+/** Board: per task, a pushed change wins over the base; otherwise keep the live version. Columns: the pushed list, if it changed. */
+export function mergeBoard(fork: Y.Doc, base: BoardFile, theirs: BoardFile) {
   const tasks = fork.getMap<Task>("tasks");
-  const b = new Map(base.map((t) => [t.id, JSON.stringify(t)]));
-  const th = new Map(theirs.map((t) => [t.id, t]));
+  const b = new Map((base.tasks ?? []).map((t) => [t.id, JSON.stringify(t)]));
+  const th = new Map((theirs.tasks ?? []).map((t) => [t.id, t]));
   fork.transact(() => {
     for (const [id, task] of th) if (b.get(id) !== JSON.stringify(task)) tasks.set(id, task);
     for (const id of b.keys()) if (!th.has(id)) tasks.delete(id);
+    if (JSON.stringify(base.columns ?? null) !== JSON.stringify(theirs.columns ?? null)) {
+      const board = fork.getMap<TaskColumn[]>("board");
+      if (theirs.columns?.length) board.set("columns", theirs.columns);
+      else board.delete("columns");
+    }
   });
 }
 
@@ -71,7 +78,7 @@ export async function mergePushed(projectId: string, oldHead: string, newHead: s
 
     if (rel === BOARD) {
       const room = liveDoc(projectId, ROOM);
-      const parse = (b: Buffer | null) => { try { return (JSON.parse(b?.toString() ?? "") as { tasks: Task[] }).tasks ?? []; } catch { return []; } };
+      const parse = (b: Buffer | null): BoardFile => { try { return JSON.parse(b?.toString() ?? "") as BoardFile; } catch { return {}; } };
       if (room) mergeIntoLive(room, Y.encodeStateAsUpdate(room), (fork) => mergeBoard(fork, parse(baseBuf), parse(theirsBuf)));
       else if (theirsBuf) await writeFile(abs, theirsBuf);
       continue;
