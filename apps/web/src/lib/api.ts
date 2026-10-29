@@ -57,11 +57,25 @@ export const api = {
   createEntry: (id: string, path: string, type: "file" | "dir") => req<{ ok: true; existed?: boolean }>(`${P(id)}/entries`, json("POST", { path, type })),
   move: (id: string, from: string, to: string) => req(`${P(id)}/move`, json("POST", { from, to })),
   remove: (id: string, path: string) => req(`${P(id)}/entries?path=${q(path)}`, { method: "DELETE" }),
-  upload: (id: string, dir: string, files: File[]) => {
-    const form = new FormData();
-    form.set("dir", dir);
-    files.forEach((f) => form.append("files", f));
-    return req<{ saved: string[] }>(`${P(id)}/upload`, { method: "POST", body: form });
+  /** Upload files (each with its path inside `dir`, so dropped folders keep their structure), in batches under the server's size limit. */
+  upload: async (id: string, dir: string, items: { path: string; file: File }[], dirs: string[] = []) => {
+    const LIMIT = 40 * 1024 * 1024;
+    const batches: { path: string; file: File }[][] = [[]];
+    let size = 0;
+    for (const it of items) {
+      if (size + it.file.size > LIMIT && batches.at(-1)!.length) { batches.push([]); size = 0; }
+      batches.at(-1)!.push(it);
+      size += it.file.size;
+    }
+    const saved: string[] = [];
+    for (const [i, batch] of batches.entries()) {
+      const form = new FormData();
+      form.set("dir", dir);
+      if (i === 0) dirs.forEach((d) => form.append("dirs", d));
+      batch.forEach((it) => { form.append("files", it.file); form.append("paths", it.path); });
+      saved.push(...(await req<{ saved: string[] }>(`${P(id)}/upload`, { method: "POST", body: form })).saved);
+    }
+    return { saved };
   },
   rawUrl: (id: string, path: string) => `/api${P(id)}/raw?path=${q(path)}`,
   /** A file as-is, or a folder (or the whole project, with no path) as a .zip. */

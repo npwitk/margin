@@ -14,6 +14,7 @@ import { AssistantPanel } from "./AssistantPanel.tsx";
 import { CitationsPanel } from "./CitationsPanel.tsx";
 import { ReviewView } from "./ReviewView.tsx";
 import { useYMap } from "../lib/collab.ts";
+import type { Dropped } from "../lib/dropped.ts";
 import { navigate } from "../lib/router.ts";
 import { rememberAvatars } from "../lib/avatars.ts";
 import { load, save } from "../lib/storage.ts";
@@ -300,11 +301,16 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   // ── File actions ─────────────────────────────────────────────────────────
   const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 
-  const uploadTo = async (dir: string, list: File[]) => {
+  const uploadTo = async (dir: string, list: File[] | Dropped) => {
+    const dropped: Dropped = Array.isArray(list) ? { files: list.map((file) => ({ path: file.name, file })), dirs: [] } : list;
     try {
-      const { saved } = await api.upload(projectId, dir, list);
+      const { saved } = await api.upload(projectId, dir, dropped.files, dropped.dirs);
       await refreshFiles();
-      notify(`Added ${saved.length} file${saved.length === 1 ? "" : "s"}${dir ? ` to ${dir}/` : ""}`);
+      // Show the first folder that came in, like Finder selects what you dropped.
+      const top = [...dropped.files.map((f) => f.path), ...dropped.dirs].find((p) => p.includes("/"))?.split("/")[0] ?? dropped.dirs[0];
+      if (top) setRevealPath({ path: dir ? `${dir}/${top}` : top, key: Date.now() });
+      const folders = new Set([...dropped.files.map((f) => f.path), ...dropped.dirs].filter((p) => p.includes("/") || dropped.dirs.includes(p)).map((p) => p.split("/")[0]));
+      notify(`Added ${saved.length} file${saved.length === 1 ? "" : "s"}${folders.size ? ` in ${[...folders].map((f) => `${f}/`).join(", ")}` : ""}${dir ? ` to ${dir}/` : ""}`);
     } catch (err) {
       notify((err as Error).message);
     }

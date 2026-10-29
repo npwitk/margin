@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent }
 import { documentLabels, isTextPath, type DocumentInfo, type FileEntry, type ProjectSection } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
 import { load, save } from "../lib/storage.ts";
+import { readDrop, type Dropped } from "../lib/dropped.ts";
 import type { Peer } from "../lib/collab.ts";
 import { Avatar } from "./Presence.tsx";
 
@@ -22,7 +23,7 @@ interface Props {
   peersByFile: Map<string, Peer[]>;
   onOpen(path: string): void;
   onAction(action: TreeAction, path: string): void;
-  onDropFiles(dir: string, files: File[]): void;
+  onDropFiles(dir: string, dropped: Dropped): void;
   /** Scroll to and highlight this path, opening the groups and folders it's in. */
   reveal?: { path: string; key: number };
   /** Drag a file or folder in the tree onto a folder ("" = project root). */
@@ -236,8 +237,8 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
     setDropTarget(null);
     const from = e.dataTransfer.getData(MOVE_TYPE);
     if (from) { setDragging(null); if (canMoveInto(from, dir)) onMove(from, dir); return; }
-    const list = [...e.dataTransfer.files];
-    if (list.length) onDropFiles(dir, list);
+    // Folders come with everything in them, structure kept.
+    void readDrop(e.dataTransfer).then((d) => { if (d.files.length || d.dirs.length) onDropFiles(dir, d); });
   };
   const dropProps = (dir: string) => ({
     onDragOver: (e: DragEvent) => {

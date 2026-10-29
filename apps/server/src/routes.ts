@@ -204,10 +204,17 @@ export const projectRoutes = new Hono<AppEnv>()
     const form = await c.req.formData();
     const dir = String(form.get("dir") ?? "").replace(/^\/+|\/+$/g, "");
     const saved: string[] = [];
-    for (const item of form.getAll("files")) {
+    // A dropped folder sends each file's path inside it ("paths", in the same order) and its empty folders ("dirs").
+    const paths = form.getAll("paths").map(String);
+    const inside = (p: string) => {
+      const parts = p.replace(/\\/g, "/").split("/").filter((x) => x && x !== ".");
+      if (!parts.length || parts.includes("..")) throw new HttpError(400, `Bad path in upload: ${p}`);
+      return (dir ? `${dir}/` : "") + parts.join("/");
+    };
+    for (const d of form.getAll("dirs").map(String)) await createEntry(id, inside(d), "dir");
+    for (const [i, item] of form.getAll("files").entries()) {
       if (typeof item === "string") continue;
-      const name = path.basename(item.name);
-      const rel = dir ? `${dir}/${name}` : name;
+      const rel = inside(paths[i] || path.basename(item.name));
       const data = Buffer.from(await item.arrayBuffer());
       const existing = await stat(resolvePath(id, rel)).then(() => true, () => false);
       // Re-uploading a .tex/.bib someone has open: merge it into the live document.
