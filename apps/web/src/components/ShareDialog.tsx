@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentMode, ProjectAccess, Session } from "@margin/shared";
+import type { AgentMode, MemberRole, ProjectAccess, Session } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { relativeTime } from "../lib/time.ts";
@@ -9,7 +9,7 @@ import { Avatar } from "./Presence.tsx";
 
 export function ShareDialog({ projectId, session, onClose }: { projectId: string; session: Session; onClose(): void }) {
   const [access, setAccess] = useState<ProjectAccess | null>(null);
-  const [link, setLink] = useState<string | null>(null);
+  const [link, setLink] = useState<{ url: string; role: "editor" | "advisor" } | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,10 +25,10 @@ export function ShareDialog({ projectId, session, onClose }: { projectId: string
     try { await fn(); await refresh(); } catch (e) { setError((e as Error).message); }
   };
 
-  const invite = () => run(async () => {
-    const r = await api.createInvite(projectId);
+  const invite = (role: "editor" | "advisor") => run(async () => {
+    const r = await api.createInvite(projectId, role);
     const url = `${location.origin}/#/join/${projectId}/${r.token}`;
-    setLink(url);
+    setLink({ url, role });
     try { await navigator.clipboard.writeText(url); setCopied(true); } catch { /* manual copy */ }
   });
 
@@ -45,13 +45,18 @@ export function ShareDialog({ projectId, session, onClose }: { projectId: string
           {owner && (
             <div className="invite-box">
               {link ? (
-                <div className="code-line"><code>{link}</code>
-                  <button className="icon-btn" title="Copy" onClick={async () => { await navigator.clipboard.writeText(link).catch(() => {}); setCopied(true); }}><Icon name={copied ? "check" : "copy"} size={14} /></button>
+                <div className="code-line"><code>{link.url}</code>
+                  <button className="icon-btn" title="Copy" onClick={async () => { await navigator.clipboard.writeText(link.url).catch(() => {}); setCopied(true); }}><Icon name={copied ? "check" : "copy"} size={14} /></button>
                 </div>
               ) : (
-                <button className="btn primary" onClick={() => void invite()}><Icon name="plus" size={13} />Create invite link</button>
+                <div className="row gap">
+                  <button className="btn primary" onClick={() => void invite("editor")}><Icon name="plus" size={13} />Invite a co-author</button>
+                  <button className="btn" onClick={() => void invite("advisor")} title="Advisors read, comment, follow Updates and use the board, but don't edit files"><Icon name="people" size={13} />Invite an advisor</button>
+                </div>
               )}
-              <span className="muted small">{link ? "Anyone with this link can join as an editor for 14 days." : "Links let people join as editors and expire after 14 days."}</span>
+              <span className="muted small">{link
+                ? `Anyone with this link can join as ${link.role === "advisor" ? "an advisor (read, comment, Updates, board)" : "an editor"} for 14 days.`
+                : "Links expire after 14 days. Advisors (an instructor or supervisor) can read, comment, follow Updates and use the board, but not change files."}</span>
             </div>
           )}
           <div className="section-label tokens-label">Members</div>
@@ -61,9 +66,10 @@ export function ShareDialog({ projectId, session, onClose }: { projectId: string
                 <Avatar name={m.name} src={m.avatar} size="sm" />
                 <span className="grow">{m.name}{m.id === access.you?.id && <span className="muted"> (you)</span>} <span className="muted small">{m.id.startsWith("gh:") ? `@${m.id.slice(3)}` : ""}</span></span>
                 {owner && m.id !== access.you?.id ? (
-                  <select value={m.role} onChange={(e) => void run(() => api.setRole(projectId, m.id, e.target.value as "owner" | "editor"))}>
+                  <select value={m.role} onChange={(e) => void run(() => api.setRole(projectId, m.id, e.target.value as MemberRole))}>
                     <option value="owner">Owner</option>
                     <option value="editor">Editor</option>
+                    <option value="advisor">Advisor</option>
                   </select>
                 ) : <span className="badge">{m.role}</span>}
                 {(owner || m.id === access.you?.id) && (

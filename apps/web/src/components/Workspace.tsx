@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isTextPath, type OutlineEntry, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions } from "@margin/shared";
+import { isTextPath, type OutlineEntry, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions, type WorkspaceView } from "@margin/shared";
 import { DocumentSwitcher, NewDocumentDialog, type NewDocumentInput } from "./DocumentSwitcher.tsx";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
@@ -7,6 +7,7 @@ import { useThreads } from "../lib/review.ts";
 import { ReviewPanel, type Draft } from "./ReviewPanel.tsx";
 import { LocalDialog } from "./LocalDialog.tsx";
 import { ShareDialog } from "./ShareDialog.tsx";
+import { Updates } from "./Updates.tsx";
 import { MarkdownView } from "./MarkdownView.tsx";
 import { AiSettingsDialog } from "./AiSettingsDialog.tsx";
 import { AssistantPanel } from "./AssistantPanel.tsx";
@@ -84,7 +85,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [outlineTick, setOutlineTick] = useState(0);
   const [currentHeading, setCurrentHeading] = useState(-1);
   const cursor = useRef<{ file: string | null; line: number | null }>({ file: null, line: null });
-  const [view, setView] = useState<"write" | "board" | "review">(() => load(`view:${projectId}`, "write"));
+  const [view, setView] = useState<WorkspaceView>(() => load(`view:${projectId}`, "write"));
+  // Advisors read, comment and follow Updates; they don't type into files.
+  const [advisor, setAdvisor] = useState(false);
+  useEffect(() => { api.access(projectId).then((a) => setAdvisor(a.you?.role === "advisor")).catch(() => {}); }, [projectId]);
   const [previewTab, setPreviewTab] = useState<"pdf" | "assistant" | "citations">(() => load("previewTab", "pdf"));
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
@@ -214,8 +218,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
   // ── Initial load ─────────────────────────────────────────────────────────
   useEffect(() => {
-    Promise.all([api.project(projectId), api.files(projectId), refreshDocs()])
-      .then(([p, f, d]) => {
+    Promise.all([api.project(projectId), api.files(projectId), refreshDocs(), api.access(projectId).catch(() => null)])
+      .then(([p, f, d, access]) => {
         setProject(p);
         setFiles(f);
         const saved = load<string | null>(`doc:${projectId}`, null);
@@ -223,7 +227,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         activeRef.current = start;
         setActiveDocState(start);
         const last = load<string | null>(`open:${projectId}`, null);
-        const startView = load<"write" | "board" | "review">(`view:${projectId}`, "write");
+        // Advisors start on Updates the first time; everyone comes back to where they were.
+        const startView = load<WorkspaceView | null>(`view:${projectId}`, null) ?? (access?.you?.role === "advisor" ? "updates" : "write");
         openFile(last && f.some((x) => x.path === last && x.type === "file") ? last : p.mainFile);
         setView(startView);
         compile();
@@ -701,6 +706,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           <button className={view === "write" ? "active" : ""} onClick={() => setView("write")}>Write</button>
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")} title={`Board (${MOD}⇧B)`}>Board</button>
           <button className={view === "review" ? "active" : ""} onClick={() => setView("review")} title="AI review">Review</button>
+          <button className={view === "updates" ? "active" : ""} onClick={() => setView("updates")} title="What changed, summarized for co-authors and advisors, and their notes">Updates</button>
         </div>
         <div className="toolbar-trailing">
           <PresenceStrip peers={[...peers, ...agentPeers]} onFollow={follow} onRevertAgent={revertAgent} />
@@ -727,6 +733,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
 
       {view === "board" && (
         <Board collab={collab} session={session} files={files} peers={peers} projectName={project.name} onOpenFile={(p) => openFile(p)} />
+      )}
+      {view === "updates" && (
+        <Updates projectId={projectId} collab={collab} session={session} advisor={advisor} notify={notify}
+          onOpenFile={(p) => { setView("write"); openFile(p); }} onOpenHistory={() => setHistoryOpen(true)} onOpenBoard={() => setView("board")} />
       )}
       {view === "review" && (
         <ReviewView project={project} settings={aiSettings} onProjectChange={setProject} onOpenSettings={() => setAiSettingsOpen(true)} docs={docs} activeDoc={currentDoc}
@@ -850,6 +860,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     onCompile={compile}
                     onForwardSync={(p, l) => void forwardSync(p, l)}
                     onError={notify}
+                    readOnly={advisor}
                     onConflicts={(file, n) => { if (!n && collab?.conflicts.has(file)) collab.conflicts.delete(file); }}
                     citeOptions={citeOptions}
                     onLibraryCite={libraryCite}
@@ -866,6 +877,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
              </div>
               {reviewOpen && !binaryOpen && (
                 <ReviewPanel
+                  remote={advisor && textPath ? { projectId, path: textPath, onError: notify } : undefined}
                   doc={reviewDoc}
                   threads={threads}
                   session={session}

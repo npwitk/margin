@@ -82,3 +82,23 @@ test("board tools follow the project's own columns", async () => {
   const board = JSON.parse(await readFile(path.join(storage.projectDir(p.id), ".margin/board.json"), "utf8"));
   assert.deepEqual(board.columns.map((c: { id: string }) => c.id), ["todo", "doing", "review", "blocked", "done"]);
 });
+
+test("an advisor's agent can comment and use the board but not change files", async () => {
+  const access = await import("./access.ts");
+  const p = await storage.createProject("Advised", "article", "Alice");
+  await access.addOwner(p.id, { name: "Alice" });
+  // Bob joins with an advisor invite.
+  const invite = await access.createInvite(p.id, { name: "Alice" }, "advisor");
+  await access.joinWithInvite(p.id, { name: "Bob" }, invite.token);
+  assert.equal(await access.roleOf(p.id, { name: "Bob" }), "advisor");
+  const bob = { projectId: p.id, session: { name: "Bob", agent: "Claude Code" }, agentName: "Claude Code", key: "ext-bob", status() {} };
+  const text = await readFile(path.join(storage.projectDir(p.id), "main.tex"), "utf8");
+  const line = text.split("\n").find((l) => l.includes("\\begin{document}"))!;
+  const edit = await runTool("edit_file", { path: "main.tex", find: line, replace: `${line}%`, reason: "x" }, bob);
+  assert.ok(edit.isError);
+  assert.match(edit.content, /advisor/);
+  const comment = await runTool("add_comment", { path: "main.tex", quote: line, message: "Is this right?" }, bob);
+  assert.ok(!comment.isError, comment.content);
+  const task = await runTool("create_task", { title: "Rerun experiment B" }, bob);
+  assert.ok(!task.isError, task.content);
+});

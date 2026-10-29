@@ -19,6 +19,10 @@ const MAX_MS = Number(process.env.MARGIN_AUTOSAVE_MAX_MS ?? 30 * 60_000);
 interface Pending { editors: Map<string, Set<string>>; first: number; last: number }
 const pending = new Map<string, Pending>();
 
+const listeners: ((projectId: string, cp: Checkpoint) => void)[] = [];
+/** Called after every saved version (e.g. to write the Updates feed). */
+export function onVersionSaved(fn: (projectId: string, cp: Checkpoint) => void) { listeners.push(fn); }
+
 /** Who's credited for an edit: the person, or "Claude Code (for Alice)" for their agent. */
 export const editorName = (s: Session) => (s.agent ? `${s.agent} (for ${s.name})` : s.name);
 
@@ -65,7 +69,10 @@ export async function saveVersion(projectId: string, opts: { message?: string; b
   const message = opts.message?.trim() || (files.length ? `Edited ${short(files)}` : "Saved changes");
   try {
     const cp = await withGitLock(projectId, () => checkpoint(projectDir(projectId), message, author, { coAuthors: people, kind: opts.kind ?? (opts.message ? "named" : "auto") }));
-    if (cp) emit(projectId, "historyVersion", Date.now());
+    if (cp) {
+      emit(projectId, "historyVersion", Date.now());
+      for (const fn of listeners) fn(projectId, cp);
+    }
     return cp;
   } catch (err) {
     // Keep the edits pending so the next attempt includes them.

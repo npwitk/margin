@@ -4,6 +4,7 @@ import {
   acceptSuggestion, createThread, deleteThread, reply, setStatus,
   type ResolvedThread, type Session, type ThreadKind,
 } from "@margin/shared";
+import { api } from "../lib/api.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Avatar } from "./Presence.tsx";
 import { Icon } from "./Icon.tsx";
@@ -19,11 +20,42 @@ interface Props {
   onDraftDone(): void;
   onActivate(t: ResolvedThread): void;
   onClose(): void;
+  /** Read-only viewers (advisors): send comments through the server instead of editing the document, and don't offer Accept. */
+  remote?: { projectId: string; path: string; onError(message: string): void };
+}
+
+/** What a viewer can do to threads: on the live document, or through the API. */
+interface ThreadOps {
+  create(input: { from: number; to: number; kind: ThreadKind; message?: string; replacement?: string }): void;
+  reply(id: string, text: string): void;
+  status(id: string, status: "open" | "resolved" | "rejected"): void;
+  accept?(id: string): void;
+  remove(id: string): void;
+}
+
+function threadOps(doc: Y.Doc | null, me: string, remote: Props["remote"]): ThreadOps | null {
+  if (remote) {
+    const run = (p: Promise<unknown>) => void p.catch((e) => remote.onError((e as Error).message));
+    return {
+      create: (input) => run(api.addThread(remote.projectId, { path: remote.path, ...input })),
+      reply: (id, text) => run(api.threadAction(remote.projectId, id, { path: remote.path, action: "reply", text })),
+      status: (id, status) => run(api.threadAction(remote.projectId, id, { path: remote.path, action: status })),
+      remove: (id) => run(api.threadAction(remote.projectId, id, { path: remote.path, action: "delete" })),
+    };
+  }
+  if (!doc) return null;
+  return {
+    create: (input) => { createThread(doc, { ...input, author: me }); },
+    reply: (id, text) => { reply(doc, id, me, text); },
+    status: (id, status) => { setStatus(doc, id, status, me); },
+    accept: (id) => { acceptSuggestion(doc, id, me); },
+    remove: (id) => { deleteThread(doc, id); },
+  };
 }
 
 const clip = (s: string, n = 160) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
-export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDone, onActivate, onClose }: Props) {
+export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDone, onActivate, onClose, remote }: Props) {
   const [filter, setFilter] = useState<"open" | "all">("open");
   const list = threads.filter((t) => filter === "all" || t.status === "open");
   const listRef = useRef<HTMLDivElement>(null);
@@ -33,6 +65,7 @@ export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDon
   }, [activeId]);
 
   const me = session.name;
+  const ops = threadOps(doc, me, remote);
   return (
     <aside className="review-panel">
       <div className="review-head">
@@ -43,7 +76,7 @@ export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDon
         <button className="icon-btn" onClick={onClose} title="Close"><Icon name="x" size={14} /></button>
       </div>
       <div className="review-list" ref={listRef}>
-        {draft && doc && <Composer doc={doc} draft={draft} author={me} onDone={onDraftDone} />}
+        {draft && ops && <Composer ops={ops} draft={draft} onDone={onDraftDone} />}
         {!draft && list.length === 0 && (
           <div className="empty small">
             {filter === "open" ? "No open comments." : "No comments yet."}<br />
@@ -51,14 +84,14 @@ export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDon
           </div>
         )}
         {list.map((t) => (
-          <ThreadCard key={t.id} t={t} doc={doc} me={me} active={t.id === activeId} onActivate={() => onActivate(t)} />
+          <ThreadCard key={t.id} t={t} ops={ops} me={me} active={t.id === activeId} onActivate={() => onActivate(t)} />
         ))}
       </div>
     </aside>
   );
 }
 
-function Composer({ doc, draft, author, onDone }: { doc: Y.Doc; draft: Draft; author: string; onDone(): void }) {
+function Composer({ ops, draft, onDone }: { ops: ThreadOps; draft: Draft; onDone(): void }) {
   const [kind, setKind] = useState<ThreadKind>(draft.kind);
   const [message, setMessage] = useState("");
   const [replacement, setReplacement] = useState(draft.quote);
@@ -66,7 +99,7 @@ function Composer({ doc, draft, author, onDone }: { doc: Y.Doc; draft: Draft; au
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (kind === "comment" && !message.trim()) return;
-    createThread(doc, { from: draft.from, to: draft.to, author, kind, message: message.trim() || undefined, replacement: kind === "suggestion" ? replacement : undefined });
+    ops.create({ from: draft.from, to: draft.to, kind, message: message.trim() || undefined, replacement: kind === "suggestion" ? replacement : undefined });
     onDone();
   };
 
@@ -93,11 +126,11 @@ function Composer({ doc, draft, author, onDone }: { doc: Y.Doc; draft: Draft; au
   );
 }
 
-function ThreadCard({ t, doc, me, active, onActivate }: { t: ResolvedThread; doc: Y.Doc | null; me: string; active: boolean; onActivate(): void }) {
+function ThreadCard({ t, ops, me, active, onActivate }: { t: ResolvedThread; ops: ThreadOps | null; me: string; active: boolean; onActivate(): void }) {
   const [text, setText] = useState("");
   const closed = t.status !== "open";
   const orphaned = t.from === null;
-  const act = (fn: (d: Y.Doc) => unknown) => { if (doc) fn(doc); };
+  const act = (fn: (o: ThreadOps) => unknown) => { if (ops) fn(ops); };
 
   return (
     <div className={`thread ${active ? "active" : ""} ${closed ? "closed" : ""}`} data-id={t.id} onClick={onActivate}>
@@ -127,18 +160,18 @@ function ThreadCard({ t, doc, me, active, onActivate }: { t: ResolvedThread; doc
       ))}
       {active && (
         <div className="thread-actions" onClick={(e) => e.stopPropagation()}>
-          <form onSubmit={(e) => { e.preventDefault(); if (text.trim()) { act((d) => reply(d, t.id, me, text.trim())); setText(""); } }}>
+          <form onSubmit={(e) => { e.preventDefault(); if (text.trim()) { act((o) => o.reply(t.id, text.trim())); setText(""); } }}>
             <input className="input sm-input" placeholder="Reply…" value={text} onChange={(e) => setText(e.target.value)} />
           </form>
           <div className="row gap">
-            {!closed && t.kind === "suggestion" && !orphaned && (
-              <button className="btn primary" onClick={() => act((d) => acceptSuggestion(d, t.id, me))}><Icon name="check" size={13} />Accept</button>
+            {!closed && t.kind === "suggestion" && !orphaned && ops?.accept && (
+              <button className="btn primary" onClick={() => act((o) => o.accept?.(t.id))}><Icon name="check" size={13} />Accept</button>
             )}
-            {!closed && t.kind === "suggestion" && <button className="btn" onClick={() => act((d) => setStatus(d, t.id, "rejected", me))}>Reject</button>}
-            {!closed && t.kind === "comment" && <button className="btn" onClick={() => act((d) => setStatus(d, t.id, "resolved", me))}><Icon name="check" size={13} />Resolve</button>}
-            {closed && t.status !== "accepted" && <button className="btn ghost" onClick={() => act((d) => setStatus(d, t.id, "open", me))}>Reopen</button>}
+            {!closed && t.kind === "suggestion" && <button className="btn" onClick={() => act((o) => o.status(t.id, "rejected"))}>Reject</button>}
+            {!closed && t.kind === "comment" && <button className="btn" onClick={() => act((o) => o.status(t.id, "resolved"))}><Icon name="check" size={13} />Resolve</button>}
+            {closed && t.status !== "accepted" && <button className="btn ghost" onClick={() => act((o) => o.status(t.id, "open"))}>Reopen</button>}
             <div className="spacer" />
-            {t.author === me && <button className="btn ghost danger-text" onClick={() => act((d) => deleteThread(d, t.id))}>Delete</button>}
+            {t.author === me && <button className="btn ghost danger-text" onClick={() => act((o) => o.remove(t.id))}>Delete</button>}
           </div>
           {closed && t.closedBy && <div className="muted small">{t.status} by {t.closedBy}</div>}
         </div>

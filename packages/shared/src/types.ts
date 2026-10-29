@@ -205,7 +205,8 @@ export interface Session {
   agent?: string;
 }
 
-export type MemberRole = "owner" | "editor";
+/** Advisors (an instructor, a supervisor) read, comment, follow the Updates feed and use the board, but don't edit files. */
+export type MemberRole = "owner" | "editor" | "advisor";
 
 export interface Member {
   /** "gh:<login>" for GitHub accounts, "name:<name>" for password sign-in. */
@@ -220,7 +221,7 @@ export interface ProjectAccess {
   /** "workspace": everyone signed in can open every project. "members": only listed members. */
   mode: "workspace" | "members";
   members: Member[];
-  invites: { id: string; createdBy: string; createdAt: string; expiresAt: string }[];
+  invites: { id: string; createdBy: string; createdAt: string; expiresAt: string; role?: MemberRole }[];
   you?: Member;
 }
 
@@ -361,11 +362,13 @@ export interface Task {
 }
 
 /** What each connected member broadcasts on the project room's awareness. */
+export type WorkspaceView = "write" | "board" | "review" | "updates";
+
 export interface PresenceState {
   user: { name: string; color: string; avatar?: string; agent?: boolean };
   file?: string | null;
   line?: number;
-  view?: "write" | "board" | "review";
+  view?: WorkspaceView;
 }
 
 /** Live events the server pushes through the project room. */
@@ -374,7 +377,36 @@ export interface RoomEvents {
   lastCompile?: { by: string; at: number; ok: boolean; doc?: string };
   /** A version was saved (history changed). */
   historyVersion?: number;
+  /** The Updates feed changed (a new summary, note or comment). */
+  updatesVersion?: number;
 }
+
+/**
+ * The Updates feed: what changed in the paper, written up by Claude after
+ * versions are saved (so an advisor can follow along), and notes people post
+ * ("the ablation didn't work, switch to C") that can become board tasks.
+ */
+export interface ProjectUpdate {
+  id: string;
+  kind: "summary" | "note";
+  at: string;
+  /** "Claude" for summaries; the person for notes. */
+  author: string;
+  title: string;
+  /** Markdown. */
+  body: string;
+  /** For summaries: the versions it covers (git commits). */
+  from?: string;
+  to?: string;
+  /** Who made the changes, and which files. */
+  people?: string[];
+  files?: string[];
+  comments?: UpdateComment[];
+  /** Board tasks made from it. */
+  tasks?: string[];
+}
+
+export interface UpdateComment { id: string; author: string; body: string; at: string }
 
 /** Collaboration document names: one per text file, plus one room per project. */
 export const ROOM = ".margin";

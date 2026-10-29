@@ -7,7 +7,7 @@ import { initRepo } from "./git.ts";
 import { kitFiles } from "./kits.ts";
 
 export class HttpError extends Error {
-  constructor(public status: 400 | 404 | 409 | 413 | 502, message: string) { super(message); }
+  constructor(public status: 400 | 403 | 404 | 409 | 413 | 502, message: string) { super(message); }
 }
 
 const META = path.join(".margin", "project.json");

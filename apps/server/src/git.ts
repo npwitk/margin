@@ -107,3 +107,32 @@ export async function fileAt(dir: string, hash: string, rel: string): Promise<Bu
     execFile("git", ["show", `${hash}:${rel}`], { cwd: dir, encoding: "buffer", maxBuffer: 200 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : stdout));
   });
 }
+
+/** The combined diff between two versions (`from` null: since the first commit), Margin's own files left out. */
+export async function diffBetween(dir: string, from: string | null, to: string, maxChars = 120_000): Promise<{ stat: string; patch: string; truncated: boolean }> {
+  const base = from ?? (await git(dir, ["rev-list", "--max-parents=0", to])).stdout.trim().split("\n")[0];
+  const range = [base, to];
+  const paths = ["--", ".", ":(exclude).margin"];
+  const [{ stdout: stat }, { stdout: patch }] = await Promise.all([
+    git(dir, ["diff", "--stat=120", ...range, ...paths]),
+    git(dir, ["diff", "-U2", "--no-color", "--no-ext-diff", ...range, ...paths]),
+  ]);
+  return { stat: stat.trim(), patch: patch.length > maxChars ? patch.slice(0, maxChars) : patch, truncated: patch.length > maxChars };
+}
+
+/** Versions after `from` up to `to`, oldest first. */
+export async function versionsBetween(dir: string, from: string | null, to: string): Promise<Checkpoint[]> {
+  const all = await history(dir, 300);
+  const end = all.findIndex((c) => c.hash === to);
+  const start = from ? all.findIndex((c) => c.hash === from) : all.length;
+  return all.slice(Math.max(0, end), start < 0 ? all.length : start).reverse();
+}
+
+/** The project's first commit (its template or import). */
+export async function rootOf(dir: string) {
+  return (await git(dir, ["rev-list", "--max-parents=0", "HEAD"])).stdout.trim().split("\n")[0];
+}
+
+export async function headOf(dir: string) {
+  return (await git(dir, ["rev-parse", "HEAD"])).stdout.trim();
+}

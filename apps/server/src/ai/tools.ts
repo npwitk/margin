@@ -7,6 +7,8 @@ import { addSection, createDocument, listDocuments, updateDocument } from "../do
 import { compileProject } from "../compile.ts";
 import { addEntry, movePath, removePath } from "../entries.ts";
 import { addProjectSection } from "../sections.ts";
+import { canEdit } from "../access.ts";
+import { commentOn, listUpdates, postNote } from "../updates.ts";
 import { getProject, listFiles, resolvePath } from "../storage.ts";
 import { editorName, recordEdit, saveVersion } from "../versions.ts";
 import { applyAgentChange } from "../connect/apply.ts";
@@ -471,6 +473,37 @@ const DEFS: Record<string, Def> = {
     },
   },
 
+  list_updates: {
+    description: "Read the project's Updates feed, newest first: Claude's summaries of what changed in each batch of versions, and notes people (often the advisor) posted, with their comments. Check it for feedback like \"that experiment didn't work, try X\".",
+    schema: z.object({ limit: z.number().int().optional().describe("How many (default 8)") }),
+    async run(input: { limit?: number }, ctx) {
+      ctx.status("Reading the updates");
+      const list = (await listUpdates(ctx.projectId)).slice(0, Math.min(30, input.limit ?? 8));
+      const content = list.map((u) => [
+        `[${u.id.slice(0, 8)}] ${u.kind === "note" ? "Note" : "Summary"} by ${u.author}, ${u.at.slice(0, 16).replace("T", " ")}: ${u.title}`,
+        u.body,
+        ...(u.comments ?? []).map((c) => `  ${c.author}: ${c.body}`),
+      ].join("\n")).join("\n\n");
+      return { summary: `Read ${list.length} update${list.length === 1 ? "" : "s"}`, content: content || "No updates yet." };
+    },
+  },
+
+  post_update: {
+    description: "Post a note to the Updates feed for co-authors and the advisor, e.g. a short report at the end of a work session: what you did, what's left, questions. Markdown. Use reply_to (an update id) to comment on an existing update instead.",
+    schema: z.object({ title: z.string().optional(), body: z.string(), reply_to: z.string().optional() }),
+    async run(input: { title?: string; body: string; reply_to?: string }, ctx) {
+      ctx.status("Posting an update");
+      if (input.reply_to) {
+        const match = (await listUpdates(ctx.projectId)).filter((u) => u.id.startsWith(input.reply_to!));
+        if (match.length !== 1) return fail("Couldn't comment", match.length ? "That id matches several updates." : "No update with that id.");
+        await commentOn(ctx.projectId, asAgent(ctx), match[0].id, input.body);
+        return { summary: `Commented on “${match[0].title}”`, content: "Comment posted." };
+      }
+      const u = await postNote(ctx.projectId, asAgent(ctx), input);
+      return { summary: `Posted “${u.title}”`, content: `Posted (id ${u.id.slice(0, 8)}).` };
+    },
+  },
+
   add_board_column: {
     description: "Add a column to the project board, e.g. \"Blocked\" or \"Waiting for advisor\". Only when the user asks for it.",
     schema: z.object({
@@ -569,9 +602,18 @@ export function toolDefinitions(): Anthropic.Beta.BetaToolUnion[] {
   return [...custom, { type: "web_search_20260209", name: "web_search", max_uses: 5 }];
 }
 
+/** What an advisor's agent (or Claude, asked by an advisor) may do: read, comment, suggest, use the board and updates. */
+const ADVISOR_TOOLS = new Set([
+  "list_files", "read_file", "search", "list_documents", "compile", "propose_edit", "add_comment", "list_comments", "reply_to_comment",
+  "list_tasks", "create_task", "update_task", "list_updates", "post_update",
+]);
+
 export async function runTool(name: string, input: unknown, ctx: ToolContext): Promise<ToolOutcome> {
   const def = DEFS[name];
   if (!def) return fail(`Unknown tool ${name}`, `Unknown tool: ${name}`);
+  if (!ADVISOR_TOOLS.has(name) && !(await canEdit(ctx.projectId, ctx.session))) {
+    return fail(`${name} isn't available`, `${ctx.session.name} is an advisor on this project: you can read, comment, suggest edits (propose_edit) and use the board, but not change files.`);
+  }
   // With eager input streaming the API doesn't validate inputs, and a
   // tolerant parse can hand us a truncated object; validate before running.
   const parsed = def.schema.safeParse(input);

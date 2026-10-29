@@ -2,7 +2,7 @@ import type {
   CheckpointFileDiff, PendingChanges,
   DocumentInfo, OutlineEntry, ConferenceEdition, ProjectVenue,
   CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
-  AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, Project, ProjectSection, Session, SyncTexForward, SyncTexInverse,
+  AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, MemberRole, Project, ProjectSection, ProjectUpdate, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
 export type StoredReview = Omit<PaperReview, "result"> & { status: "running" | "done" | "error"; error?: string; result?: PaperReview["result"] };
@@ -127,8 +127,15 @@ export const api = {
   startReview: (id: string, skill: string, goal?: string, runner?: { deviceId: string; agentId: string }, doc?: string) =>
     req<StoredReview>(`${P(id)}/ai/reviews`, json("POST", { skill, goal, runner, doc })),
   cancelReview: (id: string, reviewId: string) => req(`${P(id)}/ai/reviews/${reviewId}/cancel`, json("POST")),
-  addThread: (id: string, body: { path: string; quote: string; kind: "comment" | "suggestion"; message?: string; replacement?: string }) =>
+  addThread: (id: string, body: { path: string; quote?: string; from?: number; to?: number; kind: "comment" | "suggestion"; message?: string; replacement?: string }) =>
     req<{ id: string }>(`${P(id)}/review`, json("POST", body)),
+  threadAction: (id: string, thread: string, body: { path: string; action: "reply" | "delete" | "open" | "resolved" | "rejected"; text?: string }) =>
+    req(`${P(id)}/review/${encodeURIComponent(thread)}`, json("POST", body)),
+  updates: (id: string) => req<ProjectUpdate[]>(`${P(id)}/updates`),
+  postUpdate: (id: string, body: string) => req<ProjectUpdate>(`${P(id)}/updates`, json("POST", { body })),
+  commentOnUpdate: (id: string, update: string, body: string) => req(`${P(id)}/updates/${update}/comments`, json("POST", { body })),
+  summarizeUpdates: (id: string) => req<{ update: ProjectUpdate | null }>(`${P(id)}/updates/summarize`, json("POST")),
+  tasksFromUpdate: (id: string, update: string) => req<{ tasks: { id: string; title: string }[] }>(`${P(id)}/updates/${update}/tasks`, json("POST")),
   citations: (id: string) => req<CitationReport>(`${P(id)}/citations`),
   addDoi: (id: string, doi: string) => req<{ key: string; file: string; bibtex: string }>(`${P(id)}/citations/doi`, json("POST", { doi })),
 
@@ -142,11 +149,11 @@ export const api = {
   insertFromLibrary: (id: string, refId: string) => req<{ key: string; file: string; added: boolean; note?: string }>(`${P(id)}/library/${refId}`, json("POST")),
 
   access: (id: string) => req<ProjectAccess>(`${P(id)}/access`),
-  createInvite: (id: string) => req<{ id: string; token: string; expiresAt: string }>(`${P(id)}/invites`, json("POST")),
+  createInvite: (id: string, role: "editor" | "advisor" = "editor") => req<{ id: string; token: string; expiresAt: string }>(`${P(id)}/invites`, json("POST", { role })),
   revokeInvite: (id: string, inviteId: string) => req(`${P(id)}/invites/${inviteId}`, { method: "DELETE" }),
   join: (id: string, token: string) => req<Project>(`${P(id)}/join`, json("POST", { token })),
   removeMember: (id: string, memberId: string) => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }),
-  setRole: (id: string, memberId: string, role: "owner" | "editor") => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, json("PATCH", { role })),
+  setRole: (id: string, memberId: string, role: MemberRole) => req(`${P(id)}/members/${encodeURIComponent(memberId)}`, json("PATCH", { role })),
 
   workspace: () => req<WorkspaceInfo>("/workspace"),
   createWorkspaceInvite: (days: number, maxUses: number) => req<{ id: string; token: string; expiresAt: string; maxUses: number }>("/workspace/invites", json("POST", { days, maxUses })),

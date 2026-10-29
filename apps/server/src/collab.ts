@@ -11,7 +11,7 @@ import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity
 import { editorName, recordEdit } from "./versions.ts";
 import { DATA_DIR, SECRET } from "./config.ts";
 import { HttpError, projectDir, resolvePath } from "./storage.ts";
-import { canAccess } from "./access.ts";
+import { canAccess, canEdit } from "./access.ts";
 import { handleBridge, handleUi } from "./connect/relay.ts";
 import { verifyToken } from "./tokens.ts";
 import { isActiveMember } from "./workspace.ts";
@@ -131,13 +131,15 @@ export const hocuspocus = new Hocuspocus<CollabContext>({
   maxDebounce: 8000,
   timeout: 30_000,
 
-  async onAuthenticate({ requestHeaders, documentName }) {
+  async onAuthenticate({ requestHeaders, documentName, connectionConfig }) {
     const session = await sessionFromHeaders(requestHeaders);
     if (!session) throw new Error("unauthorized");
     const t = target(documentName);
     if (!(await exists(path.join(projectDir(t.projectId), ".margin", "project.json")))) throw new Error("no such project");
     if (!t.room && !(await isFile(t.file))) throw new Error("no such file");
     if (!(await isActiveMember(session)) || !(await canAccess(t.projectId, session))) throw new Error("no such project");
+    // Advisors watch files live but don't type into them (comments go through the API). The board stays open to them.
+    if (!t.room && !(await canEdit(t.projectId, session))) connectionConfig.readOnly = true;
     return { session };
   },
 

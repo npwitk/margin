@@ -1547,3 +1547,28 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
   .tg-main { padding: 12px 14px 24px; }
   .tg-grid, .tg-grid.wide { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; }
 }
+
+/* Updates feed: summaries of saved versions and the team's notes */
+.updates { flex: 1; min-height: 0; overflow: auto; background: var(--bg, var(--sidebar)); }
+.updates-col { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; display: grid; gap: 14px; }
+.updates-head { display: flex; align-items: flex-start; gap: 12px; }
+.updates-head > div { flex: 1; min-width: 0; }
+.updates-head h2 { margin: 0 0 2px; font-size: 18px; }
+.updates-head p { margin: 0; }
+.update-composer { display: grid; gap: 8px; padding: 12px; border-radius: 12px; background: var(--raised); box-shadow: inset 0 0 0 0.5px var(--border-strong); }
+.update-composer textarea { width: 100%; resize: vertical; min-height: 64px; font: inherit; }
+.update-card { padding: 14px 16px; border-radius: 12px; background: var(--raised); box-shadow: inset 0 0 0 0.5px var(--border-strong); display: grid; gap: 8px; }
+.update-card.note { box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 0.5px var(--border-strong); }
+.update-card-head { display: flex; align-items: center; gap: 10px; }
+.update-title { font-weight: 600; }
+.update-body { font-size: 13.5px; }
+.update-files { font-size: 12px; }
+.update-file-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.update-comments { display: grid; gap: 8px; padding-top: 8px; box-shadow: inset 0 0.5px 0 var(--border); }
+.update-comment { display: flex; gap: 8px; align-items: flex-start; }
+.update-reply { display: flex; align-items: center; gap: 8px; }
+.update-reply .input { flex: 1; min-width: 0; height: 28px; }
+@media (max-width: 640px) {
+  .updates-head { flex-direction: column; }
+  .update-reply { flex-wrap: wrap; }
+}

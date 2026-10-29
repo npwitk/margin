@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { zipSync } from "fflate";
 import {
-  ROOM, acceptSuggestion, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf,
+  ROOM, acceptSuggestion, createThread, deleteThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf,
   type CompileResult, type Engine, type FileConflict, type ProjectVenue, type ThreadKind, type ThreadStatus,
 } from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
@@ -17,10 +17,12 @@ import { emit, flushProject, forgetBoardMember, liveText, releasePath, withDoc, 
 import { changesIn, withGitLock } from "./git.ts";
 import { editorName, listVersions, pendingChanges, recordEdit, restoreVersion, saveVersion } from "./versions.ts";
 import { addEntry, movePath, removePath } from "./entries.ts";
+import { commentOn, listUpdates, postNote, summarizeNow, tasksFromUpdate } from "./updates.ts";
+import { describeApiError } from "./ai/client.ts";
 import { addProjectSection, removeProjectSection, updateProjectSection } from "./sections.ts";
 import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
-import { addOwner, canAccess, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
+import { addOwner, canAccess, requireEdit, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
 import { limit } from "./ratelimit.ts";
 import { createInvite as createWorkspaceInvite, removeMember as removeWorkspaceMember, revokeInvite as revokeWorkspaceInvite, setRole as setWorkspaceRole, workspaceInfo } from "./workspace.ts";
 import {
@@ -252,6 +254,31 @@ export const projectRoutes = new Hono<AppEnv>()
     return c.json(await withDoc(id, ROOM, c.get("session"), (doc) => [...doc.getMap<FileConflict>("conflicts").values()]));
   })
 
+  // ── Updates feed: summaries of saved versions, notes, comments ──────────
+  .get("/:id/updates", async (c) => c.json(await listUpdates(c.req.param("id"))))
+  .post("/:id/updates", async (c) => {
+    const body = await c.req.json<{ title?: string; body: string }>();
+    return c.json(await postNote(c.req.param("id"), c.get("session"), body), 201);
+  })
+  .post("/:id/updates/summarize", limit("summarize", 20, 3600), async (c) => {
+    const id = c.req.param("id");
+    await saveVersion(id).catch(() => null);
+    const u = await summarizeNow(id, c.get("session"));
+    return c.json({ update: u });
+  })
+  .post("/:id/updates/:uid/comments", async (c) => {
+    const { body } = await c.req.json<{ body: string }>();
+    return c.json(await commentOn(c.req.param("id"), c.get("session"), c.req.param("uid"), body), 201);
+  })
+  .post("/:id/updates/:uid/tasks", limit("update-tasks", 30, 3600), async (c) => {
+    try {
+      return c.json({ tasks: await tasksFromUpdate(c.req.param("id"), c.get("session"), c.req.param("uid")) });
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(400, describeApiError(err));
+    }
+  })
+
   // ── Sections: named folders (Paper, Slides, Notes…) shown as groups in the file list ──
   .post("/:id/sections", async (c) => {
     const id = c.req.param("id");
@@ -339,10 +366,12 @@ export const projectRoutes = new Hono<AppEnv>()
 
   .post("/:id/review/:thread", async (c) => {
     const id = c.req.param("id"), threadId = c.req.param("thread");
-    const body = await c.req.json<{ path: string; action: "reply" | "accept" | ThreadStatus; text?: string }>();
+    const body = await c.req.json<{ path: string; action: "reply" | "accept" | "delete" | ThreadStatus; text?: string }>();
     resolvePath(id, body.path);
     const by = c.get("session").name;
+    if (body.action === "accept") await requireEdit(id, c.get("session"));
     const ok = await withDoc(id, body.path, c.get("session"), (doc) => {
+      if (body.action === "delete") { deleteThread(doc, threadId); return true; }
       if (body.action === "reply") return !!reply(doc, threadId, by, body.text ?? "");
       if (body.action === "accept") return acceptSuggestion(doc, threadId, by);
       return !!setStatus(doc, threadId, body.action, by);
@@ -353,7 +382,10 @@ export const projectRoutes = new Hono<AppEnv>()
 
   // ── Members & invites ────────────────────────────────────────────────────
   .get("/:id/access", async (c) => c.json(await getAccess(c.req.param("id"), c.get("session"))))
-  .post("/:id/invites", async (c) => c.json(await createInvite(c.req.param("id"), c.get("session")), 201))
+  .post("/:id/invites", async (c) => {
+    const { role } = await c.req.json<{ role?: "editor" | "advisor" }>().catch(() => ({ role: undefined }));
+    return c.json(await createInvite(c.req.param("id"), c.get("session"), role === "advisor" ? "advisor" : "editor"), 201);
+  })
   .delete("/:id/invites/:invite", async (c) => { await revokeInvite(c.req.param("id"), c.get("session"), c.req.param("invite")); return c.json({ ok: true }); })
   .post("/:id/join", limit("join", 20, 3600), async (c) => {
     const { token } = await c.req.json<{ token?: string }>();
@@ -367,8 +399,8 @@ export const projectRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
   .patch("/:id/members/:member", async (c) => {
-    const { role } = await c.req.json<{ role?: "owner" | "editor" }>();
-    if (role !== "owner" && role !== "editor") throw new HttpError(400, "Role must be owner or editor");
+    const { role } = await c.req.json<{ role?: "owner" | "editor" | "advisor" }>();
+    if (role !== "owner" && role !== "editor" && role !== "advisor") throw new HttpError(400, "Role must be owner, editor or advisor");
     await setRole(c.req.param("id"), c.get("session"), decodeURIComponent(c.req.param("member")), role);
     return c.json({ ok: true });
   })
