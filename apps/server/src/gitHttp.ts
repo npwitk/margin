@@ -156,7 +156,7 @@ export async function handleGit(c: Context) {
     const finished = !isPush ? exited : exited
       .then(async () => {
         const newHead = await head(dir);
-        if (oldHead && newHead !== oldHead) await mergePushed(id, oldHead, newHead);
+        if (oldHead && newHead !== oldHead) await mergePushed(id, oldHead, newHead, member);
       })
       .catch((err) => console.error("merge after push:", err))
       .finally(() => resumeProject(id));

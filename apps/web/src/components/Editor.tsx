@@ -17,6 +17,7 @@ import * as Y from "yjs";
 import type { CiteOptions } from "@margin/shared";
 import type { ProjectCollab } from "../lib/collab.ts";
 import { agentCursors } from "../lib/agentCursors.ts";
+import { conflictMarkers } from "../lib/conflicts.ts";
 import { reviewDecorations } from "../lib/review.ts";
 
 export interface EditorHandle {
@@ -40,6 +41,8 @@ interface Props {
   onComment(): void;
   onThreadClick(id: string): void;
   onError(message: string): void;
+  /** How many overlapping-change blocks the open file has (after every edit). */
+  onConflicts?(path: string, count: number): void;
   /** References for \cite completion: the paper's own, then the library's. */
   citeOptions?(): Promise<CiteOptions>;
   /** A library reference was picked: put it in the paper; resolves to the key to cite. */
@@ -197,6 +200,7 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
           yCollab(ytext, provider.awareness, { undoManager: um }),
           reviewDecorations(provider.document, (id) => p.current.onThreadClick(id)),
           agentCursors(props.collab.agents, path),
+          conflictMarkers((n) => p.current.onConflicts?.(path, n)),
           Prec.highest(keymap.of([
             { key: "Mod-s", preventDefault: true, run: () => { p.current.onCompile(); return true; } },
             { key: "Mod-Enter", preventDefault: true, run: () => { p.current.onCompile(); return true; } },

@@ -7,7 +7,7 @@ import { Hocuspocus, type Document } from "@hocuspocus/server";
 import { parseSigned } from "hono/utils/cookie";
 import { WebSocketServer } from "ws";
 import * as Y from "yjs";
-import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type RoomEvents, type Session, type Task, type TaskColumn, type TaskComment } from "@margin/shared";
+import { ROOM, diffRegion, docName, isTextPath, parseDocName, type AgentActivity, type FileConflict, type RoomEvents, type Session, type Task, type TaskColumn, type TaskComment } from "@margin/shared";
 import { editorName, recordEdit } from "./versions.ts";
 import { DATA_DIR, SECRET } from "./config.ts";
 import { HttpError, projectDir, resolvePath } from "./storage.ts";
@@ -295,6 +295,13 @@ export function setAgentActivity(projectId: string, chatId: string, activity: Ag
     const agents = room.getMap<AgentActivity>("agents");
     if (activity) agents.set(chatId, activity);
     else agents.delete(chatId);
+  });
+}
+
+/** Two versions of a file overlapped and both are in it now, between conflict markers: tell everyone. */
+export async function noteConflict(projectId: string, file: string, count: number, by: string) {
+  await withDoc(projectId, ROOM, { name: by }, (doc) => {
+    doc.getMap<FileConflict>("conflicts").set(file, { file, count, by, at: Date.now() });
   });
 }
 

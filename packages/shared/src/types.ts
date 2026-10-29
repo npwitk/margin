@@ -144,8 +144,8 @@ export interface Checkpoint {
   message: string;
   /** Everyone whose edits are in this version (author first). */
   people?: string[];
-  /** "named": someone saved it on purpose; "auto": saved after editing went quiet; "restore": a restore. */
-  kind?: "named" | "auto" | "restore" | "other";
+  /** "named": someone saved it on purpose; "auto": saved after editing went quiet; "restore": a restore; "local": committed on someone's computer and pushed. */
+  kind?: "named" | "auto" | "restore" | "local" | "other";
   files?: { path: string; additions: number; deletions: number }[];
 }
 
@@ -158,6 +158,39 @@ export interface CheckpointFileDiff {
   deletions: number;
   /** Unified diff hunks (without the file header); truncated for huge files. */
   patch: string;
+}
+
+/**
+ * A file where two people's changes overlapped (a git push, or an agent
+ * rewriting a file people were typing in). Both versions are in the text
+ * between <<<<<<< and >>>>>>> markers until someone picks.
+ */
+export interface FileConflict {
+  file: string;
+  count: number;
+  /** Who brought the other version in, e.g. "Carol (pushed from a local copy)". */
+  by: string;
+  at: number;
+}
+
+export interface ConflictBlock {
+  /** Character offsets of the whole block, markers included. */
+  from: number;
+  to: number;
+  oursLabel: string;
+  theirsLabel: string;
+  ours: string;
+  theirs: string;
+}
+
+/** Find conflict marker blocks in a text (the standard git ones, 7 characters). */
+export function conflictBlocks(text: string): ConflictBlock[] {
+  const out: ConflictBlock[] = [];
+  const re = /^<{7}(?: (.*))?\n([\s\S]*?)^(?:\|{7}.*\n[\s\S]*?)?={7}\n([\s\S]*?)^>{7}(?: (.*))?(?:\n|$)/gm;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    out.push({ from: m.index, to: m.index + m[0].length, oursLabel: m[1] ?? "", ours: m[2], theirs: m[3], theirsLabel: m[4] ?? "" });
+  }
+  return out;
 }
 
 /** Edits not saved in a version yet. */

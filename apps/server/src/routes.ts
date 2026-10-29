@@ -6,8 +6,8 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { zipSync } from "fflate";
 import {
-  acceptSuggestion, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf,
-  type CompileResult, type Engine, type ProjectVenue, type ThreadKind, type ThreadStatus,
+  ROOM, acceptSuggestion, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf,
+  type CompileResult, type Engine, type FileConflict, type ProjectVenue, type ThreadKind, type ThreadStatus,
 } from "@margin/shared";
 import type { AppEnv } from "./auth.ts";
 import { compileProject, compileWorker } from "./compile.ts";
@@ -246,6 +246,12 @@ export const projectRoutes = new Hono<AppEnv>()
     emit(id, "filesVersion", Date.now());
     return c.json({ path: file, documents: await listDocuments(id) }, 201);
   })
+  // Files where two versions overlap and someone has to pick (for `margin sync` and scripts).
+  .get("/:id/conflicts", async (c) => {
+    const id = c.req.param("id");
+    return c.json(await withDoc(id, ROOM, c.get("session"), (doc) => [...doc.getMap<FileConflict>("conflicts").values()]));
+  })
+
   // ── Sections: named folders (Paper, Slides, Notes…) shown as groups in the file list ──
   .post("/:id/sections", async (c) => {
     const id = c.req.param("id");

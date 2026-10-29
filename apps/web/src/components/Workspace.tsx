@@ -102,6 +102,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   useEffect(() => save("previewTab", previewTab), [previewTab]);
   useEffect(() => { api.aiSettings().then(setAiSettings).catch(() => {}); }, []);
   const agentsMap = useYMap(collab?.agents);
+  const conflictsMap = useYMap(collab?.conflicts);
   // Agents (built-in Claude, or Claude Code / Codex via margin-mcp). Hide ones that went quiet.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(t); }, []);
@@ -737,6 +738,18 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       {project.setup?.status === "error" && (
         <div className="planning-banner error-banner">Planning didn't finish: {project.setup.error} The template is ready to use; you can also ask the Assistant to plan the outline.</div>
       )}
+      {conflictsMap.size > 0 && view === "write" && (
+        <div className="planning-banner conflict-banner">
+          <Icon name="alert" size={14} />
+          <span className="grow">
+            {[...conflictsMap.values()].length === 1 ? "Two versions overlap in " : "Versions overlap in "}
+            {[...conflictsMap.values()].map((c, i) => (
+              <span key={c.file}>{i ? ", " : ""}<button className="link" onClick={() => openFile(c.file)}>{c.file}</button> <span className="muted">({c.count} place{c.count === 1 ? "" : "s"}, from {c.by})</span></span>
+            ))}
+            . Open the file and pick which version to keep.
+          </span>
+        </div>
+      )}
       <div className="body" hidden={view !== "write"}>
         {sidebar && (
           <aside className="sidebar">
@@ -837,6 +850,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     onCompile={compile}
                     onForwardSync={(p, l) => void forwardSync(p, l)}
                     onError={notify}
+                    onConflicts={(file, n) => { if (!n && collab?.conflicts.has(file)) collab.conflicts.delete(file); }}
                     citeOptions={citeOptions}
                     onLibraryCite={libraryCite}
                   />

@@ -32,6 +32,12 @@ export function recordEdit(projectId: string, file: string, who: string) {
   pending.set(projectId, p);
 }
 
+/** Who has edited a file since the last version. */
+export function editorsOf(projectId: string, file: string): string[] {
+  const p = pending.get(projectId);
+  return p ? [...p.editors].filter(([, files]) => files.has(file)).map(([who]) => who) : [];
+}
+
 export function pendingChanges(projectId: string): PendingChanges | null {
   const p = pending.get(projectId);
   if (!p) return null;

@@ -52,23 +52,24 @@ export async function checkpoint(dir: string, message: string, authorName: strin
   return (await history(dir, 1))[0] ?? null;
 }
 
-const kindOf = (k: string): Checkpoint["kind"] => (k === "named" || k === "auto" || k === "restore" ? k : "other");
+// Margin's own commits carry a Margin-Kind trailer; ones without came from someone's clone.
+const kindOf = (k: string): Checkpoint["kind"] => (k === "named" || k === "auto" || k === "restore" ? k : k ? "other" : "local");
 
 /** Versions, newest first, with everyone who contributed and the files each one touched. */
 export async function history(dir: string, limit = 50, skip = 0): Promise<Checkpoint[]> {
   const { stdout } = await git(dir, [
     "log", `-n${limit}`, `--skip=${skip}`, "--numstat", "--no-renames",
-    "--pretty=format:%x1d%H%x1f%an%x1f%aI%x1f%s%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1e)%x1f%(trailers:key=Margin-Kind,valueonly)",
+    "--pretty=format:%x1d%H%x1f%an%x1f%aI%x1f%s%x1f%P%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1e)%x1f%(trailers:key=Margin-Kind,valueonly)",
   ]);
   return stdout.split("\x1d").filter((b) => b.trim()).map((block) => {
     const [head, ...lines] = block.split("\n");
-    const [hash, author, date, message, co = "", kind = ""] = head.split("\x1f");
+    const [hash, author, date, message, parents = "", co = "", kind = ""] = head.split("\x1f");
     const coNames = co.split("\x1e").map((t) => t.replace(/<[^>]*>/, "").trim()).filter(Boolean);
     const files = lines.filter((l) => l.trim()).map((l) => {
       const [a, d, ...p] = l.split("\t");
       return { path: p.join("\t"), additions: Number(a) || 0, deletions: Number(d) || 0 };
     }).filter((f) => !f.path.startsWith(".margin/") || f.path === ".margin/board.json");
-    return { hash, author, date, message, people: [...new Set([author, ...coNames])], kind: kindOf(kind.trim()), files };
+    return { hash, author, date, message, people: [...new Set([author, ...coNames])], kind: parents.trim() ? kindOf(kind.trim()) : "other", files };
   });
 }
 
