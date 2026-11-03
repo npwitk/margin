@@ -27,6 +27,7 @@ import { Icon, Spinner } from "./Icon.tsx";
 import { Outline, currentEntry } from "./Outline.tsx";
 import { PdfViewer } from "./PdfViewer.tsx";
 import { Problems } from "./Problems.tsx";
+import { Sweep, type SweepSignal } from "./Sweep.tsx";
 import { Board } from "./Board.tsx";
 import { Avatar, PresenceStrip } from "./Presence.tsx";
 
@@ -37,6 +38,9 @@ const ENGINES: { id: Engine; label: string }[] = [
 ];
 const isMac = navigator.platform.toLowerCase().includes("mac");
 const MOD = isMac ? "⌘" : "Ctrl+";
+
+type CompileTrigger = "auto" | "shortcut" | "button";
+const TRIGGER_RANK: Record<CompileTrigger, number> = { auto: 0, shortcut: 1, button: 2 };
 
 export function Workspace({ projectId, session }: { projectId: string; session: Session }) {
   const [project, setProject] = useState<Project | null>(null);
@@ -125,7 +129,12 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadDir = useRef("");
   const compiling$ = useRef(false);
-  const queued = useRef(false);
+  /** The strongest trigger waiting behind a compile in flight ("auto" < "shortcut" < "button"). */
+  const queued = useRef<CompileTrigger | null>(null);
+  // glimm sweeps: one over the PDF when it's shown, one over Problems when errors appear.
+  const [pdfSweep, setPdfSweep] = useState<SweepSignal | null>(null);
+  const [problemsSweep, setProblemsSweep] = useState<SweepSignal | null>(null);
+  const pendingPdfSweep = useRef<{ doc: string; kind: SweepSignal["kind"]; label: string; at: number } | null>(null);
   const center = useRef<HTMLDivElement>(null);
 
   const notify = useCallback((msg: string) => setToast(msg), []);
@@ -195,14 +204,18 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   }, [collab, refreshFiles, refreshDocs, session.name, notify, bumpPdf]);
 
   // ── Compile ──────────────────────────────────────────────────────────────
-  const compileImpl = useRef<() => Promise<void>>(async () => {});
-  compileImpl.current = async () => {
-    if (compiling$.current) { queued.current = true; return; }
+  const compileImpl = useRef<(trigger: CompileTrigger) => Promise<void>>(async () => {});
+  compileImpl.current = async (trigger) => {
+    if (compiling$.current) {
+      if (!queued.current || TRIGGER_RANK[trigger] > TRIGGER_RANK[queued.current]) queued.current = trigger;
+      return;
+    }
     compiling$.current = true;
     setCompiling(true);
     try {
       await collab?.flush();
       const r = await api.compile(projectId, activeRef.current ?? undefined);
+      if (trigger !== "auto" && r.doc === activeRef.current) markCompile(r, resultsRef.current[r.doc], trigger);
       setResults((m) => ({ ...m, [r.doc]: r }));
       if (r.hasPdf) bumpPdf(r.doc);
       if (r.doc === activeRef.current && r.diagnostics.some((d) => d.severity === "error")) setShowProblems(true);
@@ -212,10 +225,46 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     } finally {
       compiling$.current = false;
       setCompiling(false);
-      if (queued.current) { queued.current = false; void compileImpl.current(); }
+      const next = queued.current;
+      if (next) { queued.current = null; void compileImpl.current(next); }
     }
   };
-  const compile = useCallback(() => void compileImpl.current(), []);
+  /** Compiles nobody asked for right now (opening, restoring, switching engines) stay quiet. */
+  const compile = useCallback(() => void compileImpl.current("auto"), []);
+  const compileShortcut = useCallback(() => void compileImpl.current("shortcut"), []);
+  const compileButton = useCallback(() => void compileImpl.current("button"), []);
+
+  /**
+   * Decide whether a compile you asked for earns a sweep. Sweeps are punctuation: a press of
+   * Compile, fixing the last error, or errors that are new. Saving with ⌘S over and over, or
+   * the same errors again, stays quiet so the moments that do sweep still mean something.
+   */
+  function markCompile(r: CompileResult & { doc: string }, prev: CompileResult | undefined, trigger: CompileTrigger) {
+    const errs = r.diagnostics.filter((d) => d.severity === "error");
+    const prevErrs = prev?.diagnostics.filter((d) => d.severity === "error") ?? [];
+    const now = performance.now();
+    if (errs.length) {
+      const changed = errs.map((d) => d.message).join("\n") !== prevErrs.map((d) => d.message).join("\n");
+      if (trigger === "button" || changed) {
+        setProblemsSweep({ kind: "error", label: `${errs.length} error${errs.length > 1 ? "s" : ""}`, key: now, at: now });
+      }
+      pendingPdfSweep.current = null;
+      return;
+    }
+    if (!r.hasPdf) return;
+    const fixed = prevErrs.length > 0;
+    if (!fixed && trigger !== "button") return;
+    const secs = (r.durationMs / 1000).toFixed(1);
+    pendingPdfSweep.current = { doc: r.doc, kind: fixed ? "fixed" : "success", label: fixed ? "Fixed. Compiled cleanly" : `Compiled in ${secs}s`, at: now };
+  }
+  /** Play the PDF sweep once the new pages are actually on screen, not while it's still loading. */
+  const onPdfRendered = useCallback(() => {
+    const p = pendingPdfSweep.current;
+    pendingPdfSweep.current = null;
+    const now = performance.now();
+    if (!p || p.doc !== activeRef.current || now - p.at > 8000) return;
+    setPdfSweep({ kind: p.kind, label: p.label, key: now, at: now });
+  }, []);
 
   // ── Initial load ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -284,7 +333,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
       const k = e.key.toLowerCase();
       if (k === "k") { e.preventDefault(); setPaletteOpen((o) => !o); }
       else if (k === "d" && e.shiftKey) { e.preventDefault(); setDocMenuSignal((n) => n + 1); }
-      else if (k === "s" || k === "enter") { e.preventDefault(); compile(); }
+      else if (k === "s" || k === "enter") { e.preventDefault(); compileShortcut(); }
       else if (k === "o" && e.shiftKey) {
         e.preventDefault();
         setView("write");
@@ -296,7 +345,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [compile]);
+  }, [compileShortcut]);
 
   // ── File actions ─────────────────────────────────────────────────────────
   const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
@@ -631,7 +680,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   // ── Command palette ──────────────────────────────────────────────────────
   const commands = useMemo<Command[]>(() => {
     const cmds: Command[] = [
-      { id: "compile", label: "Compile", section: "Action", icon: "play", hint: `${MOD}S`, run: compile },
+      { id: "compile", label: "Compile", section: "Action", icon: "play", hint: `${MOD}S`, run: compileButton },
       { id: "checkpoint", label: "Version history: save, compare, restore…", section: "Action", icon: "history", run: () => setHistoryOpen(true) },
       { id: "library", label: "Open reference library", section: "Action", icon: "book", run: () => navigate({ name: "library", project: projectId }) },
       { id: "ai-review", label: "AI review of the paper", section: "AI", icon: "star", run: () => setView("review") },
@@ -729,7 +778,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
             <button className="icon-btn" onClick={() => setLocalOpen(true)} title="Work outside the browser: Claude Code and other agents, a folder on your computer, git"><Icon name="terminal" /></button>
             <button className="icon-btn" onClick={() => setShareOpen(true)} title="Share: members and invite links"><Icon name="share" /></button>
           </div>
-          <button className="btn primary compile-btn" onClick={compile} disabled={compiling} title={`Compile (${MOD}S)`}>
+          <button className="btn primary compile-btn" onClick={compileButton} disabled={compiling} title={`Compile (${MOD}S)`}>
             {compiling ? <Spinner /> : <Icon name="play" size={12} />}
             {compiling ? "Compiling" : "Compile"}
           </button>
@@ -863,7 +912,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     onCursor={(line) => { collab.setPresence({ line }); cursor.current = { file: textPath, line }; updateHeading(); }}
                     onComment={() => startComment()}
                     onThreadClick={(id) => { setReviewOpen(true); setActiveThread(id); }}
-                    onCompile={compile}
+                    onCompile={compileShortcut}
                     onForwardSync={(p, l) => void forwardSync(p, l)}
                     onError={notify}
                     readOnly={advisor}
@@ -896,7 +945,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               )}
             </div>
             {showProblems && result && (
-              <Problems result={result} onOpen={openDiagnostic} onClose={() => setShowProblems(false)}
+              <Problems result={result} sweep={problemsSweep} onOpen={openDiagnostic} onClose={() => setShowProblems(false)}
                 onFix={(d) => askClaude(`Fix this LaTeX compile error: "${d.message}"${d.file ? ` at ${d.file}${d.line ? `:${d.line}` : ""}` : ""}. Read the surrounding lines, suggest a fix, and compile to check it.`)} />
             )}
           </section>
@@ -911,8 +960,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               <button className={previewTab === "citations" ? "active" : ""} onClick={() => setPreviewTab("citations")}>Citations</button>
               </div>
             </div>
-            <div className="preview-body" hidden={previewTab !== "pdf"}>
+            <div className="preview-body sweepable" hidden={previewTab !== "pdf"}>
+              <Sweep signal={pdfSweep} />
               <PdfViewer
+                onRendered={onPdfRendered}
                 url={pdfVersion ? api.pdfUrl(projectId, pdfVersion, currentDoc) : null}
                 highlight={highlight}
                 onInverse={(pg, x, y) => void inverseSync(pg, x, y)}

@@ -14,6 +14,8 @@ interface Props {
   /** ⌘/Ctrl-click → source location. Coordinates are PDF points from the page's top-left. */
   onInverse?(page: number, x: number, y: number): void;
   emptyMessage?: string;
+  /** A newly loaded PDF is on screen (not re-renders for zoom or resizing). */
+  onRendered?(): void;
 }
 
 type Zoom = "fit" | number;
@@ -21,7 +23,10 @@ const ZOOM_STEPS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 const MIN_ZOOM = 0.05, MAX_ZOOM = 5;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
-export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
+export function PdfViewer({ url, highlight, onInverse, emptyMessage, onRendered }: Props) {
+  const onRenderedRef = useRef(onRendered);
+  onRenderedRef.current = onRendered;
+  const shownDoc = useRef<PDFDocumentProxy | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pagesEl = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
@@ -118,6 +123,7 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage }: Props) {
     scaleRef.current = s;
     liveScale.current = s;
     setScale(s);
+    if (shownDoc.current !== doc) { shownDoc.current = doc; onRenderedRef.current?.(); }
   }, [doc, zoom]);
 
   useEffect(() => { void render(); }, [render]);

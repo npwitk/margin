@@ -1,21 +1,25 @@
 import { useState } from "react";
 import type { CompileResult, Diagnostic } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
+import { Sweep, type SweepSignal } from "./Sweep.tsx";
 
 interface Props {
   result: CompileResult;
   onOpen(d: Diagnostic): void;
   onFix?(d: Diagnostic): void;
   onClose(): void;
+  /** A glimm sweep when new errors land here. */
+  sweep?: SweepSignal | null;
 }
 
-export function Problems({ result, onOpen, onFix, onClose }: Props) {
+export function Problems({ result, onOpen, onFix, onClose, sweep }: Props) {
   const [tab, setTab] = useState<"problems" | "log">("problems");
   const counts = { error: 0, warning: 0, info: 0 };
   result.diagnostics.forEach((d) => counts[d.severity]++);
 
   return (
-    <div className="problems">
+    <div className="problems sweepable">
+      <Sweep signal={sweep} />
       <div className="problems-head">
         <button className={`tab ${tab === "problems" ? "active" : ""}`} onClick={() => setTab("problems")}>
           Problems <span className="count">{result.diagnostics.length}</span>

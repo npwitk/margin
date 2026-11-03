@@ -1578,3 +1578,26 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
   .updates-head { flex-direction: column; }
   .update-reply { flex-wrap: wrap; }
 }
+
+/* ── glimm sweeps: punctuation for compiles you asked for ─────────────────── */
+.sweepable { position: relative; }
+.sweep { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
+.sweep-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.sweep-chip {
+  position: absolute; top: 12px; left: 50%;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 11px; border-radius: 13px;
+  font-size: 12px; font-weight: 500; white-space: nowrap;
+  color: var(--text); background: var(--panel);
+  box-shadow: 0 0 0 0.5px var(--border-strong), 0 4px 14px rgba(0, 0, 0, 0.12);
+  animation: sweep-chip 1.9s ease both;
+}
+.sweep-chip.success svg, .sweep-chip.fixed svg { color: var(--ok); }
+.sweep-chip.error { top: auto; bottom: 10px; color: var(--danger); }
+@keyframes sweep-chip {
+  0% { opacity: 0; transform: translate(-50%, -4px) scale(0.96); }
+  14%, 80% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -2px) scale(1); }
+}
+/* No band with reduced motion: the chip just appears, then goes. */
+@media (prefers-reduced-motion: reduce) { .sweep-chip { animation: none !important; transform: translateX(-50%); } }
