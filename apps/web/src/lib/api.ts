@@ -1,7 +1,7 @@
 import type {
   CheckpointFileDiff, PendingChanges,
   DocumentInfo, OutlineEntry, ConferenceEdition, ProjectVenue,
-  CiteOptions, LibraryAddResult, LibraryRef, LibraryView,
+  CiteCard, CiteOptions, LibraryAddResult, LibraryRef, LibraryView, PdfLookup, UsageView,
   AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, MemberRole, Project, ProjectSection, ProjectUpdate, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
@@ -157,7 +157,14 @@ export const api = {
   libraryAddDois: (dois: string[], projectId?: string) => req<LibraryAddResult & { failed: string[] }>("/library/doi", json("POST", { dois, projectId })),
   libraryAddBibtex: (text: string, projectId?: string) => req<LibraryAddResult>("/library/bibtex", json("POST", { text, projectId })),
   libraryImportProject: (projectId: string) => req<LibraryAddResult>("/library/import-project", json("POST", { projectId })),
-  libraryUpdate: (id: string, patch: Partial<Pick<LibraryRef, "key" | "type" | "fields" | "projects" | "note">>) => req<LibraryRef>(`/library/${id}`, json("PATCH", patch)),
+  libraryUpdate: (id: string, patch: Partial<Pick<LibraryRef, "key" | "type" | "fields" | "projects" | "note" | "tags">> & { summary?: string; summaryStatus?: "ai-draft" | "verified" }) => req<LibraryRef>(`/library/${id}`, json("PATCH", patch)),
+  libraryUsage: (filter: { project?: string; document?: string; ref?: string } = {}) =>
+    req<UsageView>(`/library/usage?${new URLSearchParams(Object.entries(filter).filter(([, v]) => v) as [string, string][])}`),
+  libraryAttachPdf: (id: string, file: File) => req<LibraryRef>(`/library/${id}/pdf`, { method: "PUT", body: file }),
+  libraryRemovePdf: (id: string) => req<LibraryRef>(`/library/${id}/pdf`, { method: "DELETE" }),
+  libraryFindPdf: (id: string) => req<PdfLookup & { ref: LibraryRef }>(`/library/${id}/find-pdf`, json("POST")),
+  libraryPdfUrl: (id: string) => `/api/library/${id}/pdf`,
+  citeMap: (id: string, doc?: string) => req<CiteCard[]>(`${P(id)}/cite-map${doc ? `?doc=${q(doc)}` : ""}`),
   libraryDelete: (id: string) => req(`/library/${id}`, { method: "DELETE" }),
   citeOptions: (id: string) => req<CiteOptions>(`${P(id)}/library`),
   insertFromLibrary: (id: string, refId: string) => req<{ key: string; file: string; added: boolean; note?: string }>(`${P(id)}/library/${refId}`, json("POST")),

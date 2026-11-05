@@ -10,6 +10,11 @@ Your agent works on the live paper like a co-author, with nothing to download or
 - see, claim and update board tasks
 - answer review comments
 - save named versions
+- work with the workspace reference library, shared by all your projects:
+  - add papers by DOI, BibTeX or title
+  - fetch free PDFs, or say where to download paywalled ones, then attach the file you downloaded (`attach_pdf ~/Downloads/paper.pdf`)
+  - read and search a paper's full text, and keep summary notes on it
+  - report what each document cites, used to cite, or only lists in its bibliography
 
 Co-authors see it working live ("Claude Code for Alice") with its own cursor. A project setting (Share → AI agents) decides whether edits go straight in or arrive as suggestions to accept. Everything an agent changed can be undone in one step from its avatar.
 

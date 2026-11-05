@@ -9,12 +9,12 @@ import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { EditorSelection, EditorState, Prec } from "@codemirror/state";
 import {
   EditorView, crosshairCursor, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter,
-  highlightSpecialChars, keymap, lineNumbers, rectangularSelection,
+  highlightSpecialChars, hoverTooltip, keymap, lineNumbers, rectangularSelection,
 } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import * as Y from "yjs";
-import type { CiteOptions } from "@margin/shared";
+import type { CiteCard, CiteOptions } from "@margin/shared";
 import type { ProjectCollab } from "../lib/collab.ts";
 import { agentCursors } from "../lib/agentCursors.ts";
 import { conflictMarkers } from "../lib/conflicts.ts";
@@ -49,6 +49,10 @@ interface Props {
   citeOptions?(): Promise<CiteOptions>;
   /** A library reference was picked: put it in the paper; resolves to the key to cite. */
   onLibraryCite?(refId: string, key: string): Promise<string>;
+  /** What each cited key points to (from the last compile), for hover cards on \cite{…}. */
+  citeCards?: CiteCard[];
+  onCiteOpenPdf?(card: CiteCard): void;
+  onCiteOpenLibrary?(card: CiteCard): void;
 }
 
 const highlight = HighlightStyle.define([
@@ -100,6 +104,52 @@ const CITE_OPEN = /\\[a-zA-Z]*cite[a-zA-Z]*\*?\s*(?:\[[^\]\n]*\]\s*){0,2}\{[^}\n
 const PAPER = { name: "In this paper", rank: 0 };
 const LIBRARY = { name: "From library", rank: 1 };
 
+/** Hovering a key inside \cite{…} shows what it points to. */
+function citeHover(get: () => Props) {
+  return hoverTooltip(async (view, pos) => {
+    const line = view.state.doc.lineAt(pos);
+    const text = line.text, at = pos - line.from;
+    for (const m of text.matchAll(/\\[a-zA-Z]*cite[a-zA-Z]*\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^}]*)\}/g)) {
+      const open = m.index! + m[0].length - m[1].length - 1;
+      if (at <= open || at > open + m[1].length) continue;
+      // The key under the pointer.
+      let a = at, b = at;
+      while (a > open + 1 && !/[,\s]/.test(text[a - 1])) a--;
+      while (b < open + 1 + m[1].length && !/[,\s]/.test(text[b])) b++;
+      const key = text.slice(a, b);
+      if (!key) return null;
+      const props = get();
+      let card = props.citeCards?.find((c) => c.key === key);
+      if (!card) {
+        const opt = await props.citeOptions?.().then((o) => o.paper.find((x) => x.key === key)).catch(() => undefined);
+        card = opt ? { key, label: "", title: opt.title, byline: opt.byline } : { key, label: "", title: "Not in the bibliography", byline: "" };
+      }
+      const c = card;
+      return {
+        pos: line.from + a, end: line.from + b, above: true,
+        create: () => {
+          const dom = document.createElement("div");
+          dom.className = "cite-card cm-cite-card";
+          const el = (tag: string, cls: string, txt: string) => { const e = document.createElement(tag); e.className = cls; e.textContent = txt; dom.appendChild(e); return e; };
+          el("div", "cite-title", c.title);
+          const meta = [c.authors ?? c.byline, c.venue, c.year].filter(Boolean).join(" · ");
+          if (meta) el("div", "muted small", meta);
+          if (c.tldr) el("p", "cite-tldr small", c.tldr);
+          const actions = document.createElement("div");
+          actions.className = "cite-actions";
+          const button = (label: string, run: () => void) => { const btn = document.createElement("button"); btn.className = "btn tight"; btn.textContent = label; btn.onclick = run; actions.appendChild(btn); };
+          if (c.hasPdf && props.onCiteOpenPdf) button("Open PDF", () => get().onCiteOpenPdf?.(c));
+          if (c.refId && props.onCiteOpenLibrary) button("Library", () => get().onCiteOpenLibrary?.(c));
+          if (c.doi) { const link = document.createElement("a"); link.className = "btn ghost tight"; link.href = `https://doi.org/${c.doi}`; link.target = "_blank"; link.rel = "noreferrer"; link.textContent = "DOI ↗"; actions.appendChild(link); }
+          if (actions.childElementCount) dom.appendChild(actions);
+          return { dom };
+        },
+      };
+    }
+    return null;
+  }, { hoverTime: 350 });
+}
+
 /** Completions inside \cite{…}, \citep{…}, \parencite{…} etc. */
 function citeCompletions(get: () => Props) {
   return async (ctx: CompletionContext) => {
@@ -145,7 +195,7 @@ export const Editor = forwardRef<EditorHandle, Props>(function Editor(props, ref
   // One stable source: CodeMirror drops pending results when the source's identity changes.
   const [citeData] = useState(() => {
     const data = [{ autocomplete: citeCompletions(() => p.current) }];
-    return EditorState.languageData.of(() => data);
+    return [EditorState.languageData.of(() => data), citeHover(() => p.current)];
   });
 
   const reveal = (line: number) => {

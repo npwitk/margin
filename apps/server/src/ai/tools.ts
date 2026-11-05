@@ -14,6 +14,8 @@ import { editorName, recordEdit, saveVersion } from "../versions.ts";
 import { applyAgentChange } from "../connect/apply.ts";
 import { beforeEdit, type CursorRange } from "./activity.ts";
 import { textFiles, textOf } from "./paper.ts";
+import { REFERENCE_DEFS } from "./referenceTools.ts";
+import { refreshSoon } from "../citeUsage.ts";
 
 /**
  * Tools the project assistant and external agents (MCP) can use. They read
@@ -40,7 +42,7 @@ export interface ToolOutcome {
   threadId?: string;
 }
 
-type Def = {
+export type Def = {
   description: string;
   schema: z.ZodObject;
   run(input: never, ctx: ToolContext): Promise<ToolOutcome>;
@@ -88,6 +90,7 @@ function occurrences(text: string, needle: string) {
 }
 
 const DEFS: Record<string, Def> = {
+  ...REFERENCE_DEFS,
   list_files: {
     description: "List every file in the project with its size. Marks document roots (.tex files with \\documentclass) and the default document.",
     schema: z.object({}),
@@ -331,6 +334,7 @@ const DEFS: Record<string, Def> = {
     async run(input: { message: string }, ctx) {
       ctx.status("Saving a version");
       const cp = await saveVersion(ctx.projectId, { message: input.message.slice(0, 200), by: editorName(asAgent(ctx)), kind: "named" });
+      refreshSoon(ctx.projectId, ctx.session.name);
       return { summary: cp ? `Saved version “${input.message}”` : "Nothing new to save", content: cp ? `Saved version ${cp.hash.slice(0, 8)}.` : "No changes since the last version." };
     },
   },
@@ -623,6 +627,7 @@ export function toolDefinitions(): Anthropic.Beta.BetaToolUnion[] {
 const ADVISOR_TOOLS = new Set([
   "list_files", "read_file", "search", "list_documents", "compile", "propose_edit", "add_comment", "list_comments", "reply_to_comment",
   "list_tasks", "create_task", "update_task", "list_updates", "post_update",
+  "list_references", "get_reference", "find_pdf", "read_reference", "citation_report",
 ]);
 
 export async function runTool(name: string, input: unknown, ctx: ToolContext): Promise<ToolOutcome> {

@@ -237,3 +237,10 @@ export async function addByDoi(projectId: string, session: Session, rawDoi: stri
   else await writeText(projectId, target, next);
   return { key, file: target, bibtex: bib, type: entry.type, fields: entry.fields };
 }
+
+/** The published work a title most likely names (Crossref, then OpenAlex), when the match is close. */
+export async function findByTitle(title: string): Promise<CitationMatch | null> {
+  const candidates = [...await crossrefSearch(title).catch(() => []), ...await openAlexSearch(title).catch(() => [])];
+  const best = candidates.map((m) => ({ m, sim: titleSimilarity(title, m.title) })).sort((a, b) => b.sim - a.sim)[0];
+  return best && best.sim >= 0.9 ? best.m : null;
+}

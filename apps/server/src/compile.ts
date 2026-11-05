@@ -1,6 +1,7 @@
 import type { CompileResult } from "@margin/shared";
 import { emit, flushProject } from "./collab.ts";
 import { COMPILE_TOKEN, COMPILE_URL } from "./config.ts";
+import { refreshSoon } from "./citeUsage.ts";
 import { resolveDocument } from "./documents.ts";
 import { syncWorkDir, touchProject } from "./storage.ts";
 
@@ -26,5 +27,6 @@ export async function compileProject(id: string, by: string, doc?: string | null
   })) as CompileResult;
   await touchProject(id);
   emit(id, "lastCompile", { by, at: Date.now(), ok: result.ok, doc: target.path });
+  refreshSoon(id, by);
   return { ...result, doc: target.path };
 }

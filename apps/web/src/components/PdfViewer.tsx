@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GlobalWorkerOptions, TextLayer, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import type { SyncTexForward } from "@margin/shared";
+import { citeLabels, type CiteCard, type SyncTexForward } from "@margin/shared";
+import { CiteCards, type CiteActions } from "./CiteCard.tsx";
 import { Icon } from "./Icon.tsx";
 import { bindTextLayer } from "../lib/pdfSelection.ts";
 
@@ -16,6 +17,70 @@ interface Props {
   emptyMessage?: string;
   /** A newly loaded PDF is on screen (not re-renders for zoom or resizing). */
   onRendered?(): void;
+  /** What each printed citation points to; hovering one shows its card. */
+  citations?: CiteCard[];
+  citeActions?: CiteActions;
+}
+
+/** The text character under a point, if the point really is over text. */
+function textAt(x: number, y: number): { node: Text; offset: number } | null {
+  const d = document as Document & {
+    caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?(x: number, y: number): Range | null;
+  };
+  let node: Node | undefined, offset = 0;
+  if (d.caretPositionFromPoint) { const p = d.caretPositionFromPoint(x, y); node = p?.offsetNode; offset = p?.offset ?? 0; }
+  else if (d.caretRangeFromPoint) { const r = d.caretRangeFromPoint(x, y); node = r?.startContainer; offset = r?.startOffset ?? 0; }
+  if (!node || node.nodeType !== Node.TEXT_NODE || !node.parentElement?.closest(".textLayer")) return null;
+  const r = node.parentElement.getBoundingClientRect();
+  if (x < r.left - 2 || x > r.right + 2 || y < r.top - 2 || y > r.bottom + 2) return null;
+  return { node: node as Text, offset };
+}
+
+/**
+ * The citation under the pointer: a numeric group like "[3, 7]" (the one
+ * number under the pointer, or the whole group when it's on a bracket or
+ * comma), or an author-year citation like "Vaswani et al., 2017".
+ */
+function citationAt(x: number, y: number, cards: CiteCard[]): { cards: CiteCard[]; rect: DOMRect } | null {
+  const hit = textAt(x, y);
+  if (!hit) return null;
+  const span = hit.node.parentElement!;
+  // pdf.js may split "[", "4" and "]" across neighbouring spans.
+  const prev = span.previousElementSibling?.tagName === "SPAN" ? span.previousElementSibling.textContent ?? "" : "";
+  const next = span.nextElementSibling?.tagName === "SPAN" ? span.nextElementSibling.textContent ?? "" : "";
+  const text = prev + (hit.node.textContent ?? "") + next;
+  const pos = prev.length + hit.offset;
+  const rect = span.getBoundingClientRect();
+
+  for (const p of [pos, pos - 1]) {
+    const open = text.lastIndexOf("[", p), shut = text.indexOf("]", p);
+    if (open < 0 || shut < 0 || open < p - 40 || shut > p + 40 || text.slice(open, p).includes("]") || text.slice(p, shut).includes("[")) continue;
+    let end = shut + 1;
+    const more = /^\s*[–—-]\s*\[[^\]]*\]/.exec(text.slice(end));
+    if (more) end += more[0].length;
+    const group = text.slice(open, end);
+    const labels = citeLabels(group);
+    // The number under the pointer, if it's on one.
+    let a = p, b = p;
+    while (a > open && /\d/.test(text[a - 1])) a--;
+    while (b < end && /\d/.test(text[b])) b++;
+    const one = b > a ? text.slice(a, b) : null;
+    const pick = one && labels.includes(one) ? [one] : labels;
+    const found = pick.flatMap((l) => cards.filter((c) => c.label === l && !c.authorYear));
+    if (found.length) return { cards: found.slice(0, 6), rect };
+  }
+  for (const c of cards) {
+    if (!c.authorYear) continue;
+    const name = c.authorYear.split(/[\s,]/)[0], year = /\d{4}[a-z]?/.exec(c.authorYear)?.[0];
+    if (!name || !year) continue;
+    for (let at = text.indexOf(name); at >= 0; at = text.indexOf(name, at + 1)) {
+      const y = text.indexOf(year, at);
+      if (y < 0 || y - at > 60) continue;
+      if (pos >= at && pos <= y + year.length) return { cards: [c], rect };
+    }
+  }
+  return null;
 }
 
 type Zoom = "fit" | number;
@@ -23,7 +88,30 @@ const ZOOM_STEPS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 const MIN_ZOOM = 0.05, MAX_ZOOM = 5;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
-export function PdfViewer({ url, highlight, onInverse, emptyMessage, onRendered }: Props) {
+export function PdfViewer({ url, highlight, onInverse, emptyMessage, onRendered, citations, citeActions }: Props) {
+  const [cite, setCite] = useState<{ cards: CiteCard[]; rect: DOMRect } | null>(null);
+  const citesRef = useRef(citations);
+  citesRef.current = citations;
+  const citeKey = useRef("");
+  const showTimer = useRef(0), hideTimer = useRef(0);
+  const hideCite = (delay = 200) => {
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => { setCite(null); citeKey.current = ""; }, delay);
+  };
+  const onCiteMove = (e: React.PointerEvent) => {
+    const cards = citesRef.current;
+    if (!cards?.length || e.buttons) return;
+    const hit = citationAt(e.clientX, e.clientY, cards);
+    const key = hit ? hit.cards.map((c) => c.key).join() : "";
+    if (key === citeKey.current) { if (hit) window.clearTimeout(hideTimer.current); return; }
+    citeKey.current = key;
+    window.clearTimeout(showTimer.current);
+    if (!hit) { hideCite(); return; }
+    window.clearTimeout(hideTimer.current);
+    showTimer.current = window.setTimeout(() => setCite(hit), 250);
+  };
+  useEffect(() => () => { window.clearTimeout(showTimer.current); window.clearTimeout(hideTimer.current); }, []);
+  useEffect(() => { setCite(null); citeKey.current = ""; }, [citations]);
   const onRenderedRef = useRef(onRendered);
   onRenderedRef.current = onRendered;
   const shownDoc = useRef<PDFDocumentProxy | null>(null);
@@ -270,11 +358,25 @@ export function PdfViewer({ url, highlight, onInverse, emptyMessage, onRendered 
         {doc && <span className="pdf-page-count">{page} of {doc.numPages}</span>}
         {url && <a className="icon-btn" href={url} download title="Download PDF"><Icon name="download" size={14} /></a>}
       </div>
-      <div className="pdf-scroll" ref={scroller} onClick={onClick}
-        onPointerEnter={() => { hovering.current = true; }} onPointerLeave={() => { hovering.current = false; }}>
+      <div className="pdf-scroll" ref={scroller} onClick={onClick} onPointerMove={citations?.length ? onCiteMove : undefined}
+        onScroll={() => { if (cite) { setCite(null); citeKey.current = ""; } }}
+        onPointerEnter={() => { hovering.current = true; }} onPointerLeave={() => { hovering.current = false; window.clearTimeout(showTimer.current); citeKey.current = ""; if (cite) hideCite(); }}>
         {!doc && <div className="empty">{error ? `Couldn't load PDF: ${error}` : emptyMessage ?? "No PDF yet"}</div>}
         <div className="pdf-pages" ref={pagesEl} />
       </div>
+      {cite && citeActions && (() => {
+        const below = cite.rect.bottom + 280 < window.innerHeight;
+        const style: React.CSSProperties = {
+          left: Math.max(8, Math.min(cite.rect.left, window.innerWidth - 388)),
+          ...(below ? { top: cite.rect.bottom + 6 } : { bottom: window.innerHeight - cite.rect.top + 6 }),
+        };
+        return (
+          <div className="cite-popover" style={style} role="dialog" aria-label="Cited paper"
+            onPointerEnter={() => window.clearTimeout(hideTimer.current)} onPointerLeave={() => hideCite()}>
+            <CiteCards cards={cite.cards} actions={{ ...citeActions, onOpenPdf: (c) => { setCite(null); citeActions.onOpenPdf(c); } }} />
+          </div>
+        );
+      })()}
     </div>
   );
 }
