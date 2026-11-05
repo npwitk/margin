@@ -4,7 +4,7 @@ import path from "node:path";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
-  authorList, byline, isGenericKey, plainTex, normDoi, parseBibcite, refVenue, summaryTldr, parseBibtex, refTitle, samePaper, suggestKey, toBibitem, toBibtex,
+  authorList, byline, checkProxy, viaProxy, isGenericKey, plainTex, normDoi, parseBibcite, refVenue, summaryTldr, parseBibtex, refTitle, samePaper, suggestKey, toBibitem, toBibtex,
   type CiteCard, type CiteOptions, type UsageView, type LibraryAddResult, type LibraryPdf, type LibraryRef, type LibraryView, type Session,
 } from "@margin/shared";
 import { refreshUsage, scanProject, usageRecords } from "./citeUsage.ts";
@@ -27,7 +27,7 @@ import { HttpError, getProject, listProjects, writeText } from "./storage.ts";
  * paper's .bib (or its thebibliography) through the live document.
  */
 
-interface Stored { refs: LibraryRef[] }
+interface Stored { refs: LibraryRef[]; /** The university library's proxy link (see viaProxy). */ proxy?: string }
 
 const FILE = path.join(DATA_DIR, "library.json");
 let cache: Stored | null = null;
@@ -239,7 +239,7 @@ export async function attachPdf(refId: string, data: Buffer, by: string, source:
 
 /** Try to fetch a free copy; attach it when found. */
 export async function fetchPdfFor(ref: LibraryRef, by: string) {
-  const lookup = await findPdf(ref);
+  const lookup = await findPdf(ref, (await load()).proxy);
   const { data, ...rest } = lookup;
   if (!data) return { ...rest, ref };
   return { ...rest, ref: await attachPdf(ref.id, data, by, lookup.source ?? "openalex") };
@@ -318,7 +318,15 @@ export const libraryRoutes = new Hono<AppEnv>()
   .get("/", async (c) => {
     const { projects, ids, refIds } = await libraryScope(c.get("session"));
     const refs = (await load()).refs.filter((r) => !refIds || refIds.has(r.id)).map((r) => ({ ...r, projects: r.projects.filter((p) => ids.has(p)) }));
-    return c.json({ refs, projects } satisfies LibraryView);
+    return c.json({ refs, projects, proxy: (await load()).proxy } satisfies LibraryView);
+  })
+  .put("/settings", async (c) => {
+    await requireMember(c.get("session"));
+    const body = await parseBody<{ proxy?: string }>(c);
+    const { proxy, error } = checkProxy(body.proxy ?? "");
+    if (error) throw new HttpError(400, error);
+    await mutate((s) => { s.proxy = proxy; });
+    return c.json({ proxy });
   })
   .post("/doi", limit("library-doi", 60, 600), async (c) => {
     await requireMember(c.get("session"));
@@ -473,6 +481,12 @@ export const projectLibraryRoutes = new Hono<AppEnv>()
  * What each printed citation in a compiled document points to: labels from
  * the .aux file's \bibcite lines, joined to the paper's entries and the library.
  */
+/** A paper's DOI (or URL) opened through the library proxy. */
+const linkThroughLibrary = (proxy: string | undefined, f: Record<string, string>) => {
+  const target = normDoi(f.doi) ? `https://doi.org/${normDoi(f.doi)}` : f.url;
+  return target ? viaProxy(proxy, target) : undefined;
+};
+
 /** "Ji, Jeonil and Song, Youngbae" → "Jeonil Ji, Youngbae Song". */
 const readableAuthors = (author?: string) => {
   const names = authorList(author).map((n) => {
@@ -489,7 +503,7 @@ export async function citeMap(projectId: string, doc?: string): Promise<CiteCard
   const aux = await readFile(pdfPathOf(projectId, docPath).replace(/\.pdf$/, ".aux"), "utf8").catch(() => "");
   if (!aux) return [];
   const scan = (await scanProject(projectId)).find((s) => s.document === docPath);
-  const refs = (await load()).refs;
+  const { refs, proxy } = await load();
   return parseBibcite(aux).map(({ key, label, authorYear }) => {
     const entry = scan?.entries.find((e) => e.key === key);
     const ref = entry && refs.find((r) => samePaper(r.fields, entry.fields));
@@ -499,6 +513,7 @@ export async function citeMap(projectId: string, doc?: string): Promise<CiteCard
       title: refTitle(f), byline: byline(f), authors: readableAuthors(f.author),
       venue: refVenue(f) || undefined, year: f.year, doi: normDoi(f.doi) || undefined, url: f.url,
       tldr: summaryTldr(ref?.summary?.markdown), refId: ref?.id, hasPdf: !!ref?.pdf,
+      libraryUrl: ref?.pdf ? undefined : linkThroughLibrary(proxy, f),
     };
   });
 }

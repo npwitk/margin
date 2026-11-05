@@ -164,6 +164,7 @@ export const api = {
   libraryRemovePdf: (id: string) => req<LibraryRef>(`/library/${id}/pdf`, { method: "DELETE" }),
   libraryFindPdf: (id: string) => req<PdfLookup & { ref: LibraryRef }>(`/library/${id}/find-pdf`, json("POST")),
   libraryPdfUrl: (id: string) => `/api/library/${id}/pdf`,
+  librarySettings: (proxy: string) => req<{ proxy?: string }>("/library/settings", json("PUT", { proxy })),
   citeMap: (id: string, doc?: string) => req<CiteCard[]>(`${P(id)}/cite-map${doc ? `?doc=${q(doc)}` : ""}`),
   libraryDelete: (id: string) => req(`/library/${id}`, { method: "DELETE" }),
   citeOptions: (id: string) => req<CiteOptions>(`${P(id)}/library`),

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { byline, refTitle, refVenue, toBibtex, USAGE_LABEL, type LibraryRef, type LibraryView, type PdfLookup, type Session, type UsageStatus, type UsageView } from "@margin/shared";
+import { byline, checkProxy, normDoi, refTitle, refVenue, toBibtex, USAGE_LABEL, viaProxy, type LibraryRef, type LibraryView, type PdfLookup, type Session, type UsageStatus, type UsageView } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { renderMarkdown } from "../lib/markdown.ts";
 import { navigate } from "../lib/router.ts";
@@ -29,6 +29,7 @@ export function Library({ section, doc, initialRef, session }: { section: Sectio
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(initialRef ?? null);
   const [adding, setAdding] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const reload = () => api.library().then(setView).catch((e) => setError(e.message));
@@ -89,6 +90,7 @@ export function Library({ section, doc, initialRef, session }: { section: Sectio
         <span className="project-name static">Library</span>
         <div className="spacer" />
         <input className="input sm lib-search" placeholder="Search title, author, key, DOI…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <button className="btn ghost" onClick={() => setSettingsOpen(true)} title="Get paywalled papers through your university library"><Icon name="key" size={13} />Library access</button>
         <button className="btn primary" onClick={() => setAdding(true)}><Icon name="plus" size={14} />Add references</button>
         <span className="muted small">{session.name}</span>
       </header>
@@ -182,7 +184,7 @@ export function Library({ section, doc, initialRef, session }: { section: Sectio
         </main>
 
         {current && view && (
-          <RefDetail key={current.id} ref_={current} projects={view.projects} onClose={() => setSelected(null)}
+          <RefDetail key={current.id} ref_={current} projects={view.projects} proxy={view.proxy} onClose={() => setSelected(null)}
             onSaved={(r) => { replace(r); setToast("Saved"); }}
             onDeleted={() => { setView((v) => v && { ...v, refs: v.refs.filter((r) => r.id !== current.id) }); setSelected(null); }}
             onChanged={replace}
@@ -193,8 +195,57 @@ export function Library({ section, doc, initialRef, session }: { section: Sectio
         <AddDialog projects={view.projects} defaultProject={section && section !== "none" ? section : undefined} onClose={() => setAdding(false)}
           onDone={(msg) => { setAdding(false); setToast(msg); void reload(); }} />
       )}
+      {settingsOpen && view && (
+        <AccessDialog proxy={view.proxy} onClose={() => setSettingsOpen(false)}
+          onSaved={(proxy) => { setView((v) => v && { ...v, proxy }); setSettingsOpen(false); setToast(proxy ? "Library access saved" : "Library access removed"); }} />
+      )}
       {toast && <div className="toast">{toast}</div>}
     </div>
+  );
+}
+
+/** The university library's proxy link, so papers open behind its sign-in. */
+function AccessDialog({ proxy, onClose, onSaved }: { proxy?: string; onClose(): void; onSaved(proxy?: string): void }) {
+  const [value, setValue] = useState(proxy ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const checked = checkProxy(value);
+  const example = checked.proxy ? viaProxy(checked.proxy, "https://doi.org/10.1016/j.jisa.2026.104550") : undefined;
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (checked.error) { setError(checked.error); return; }
+    setBusy(true); setError(null);
+    try { onSaved((await api.librarySettings(value)).proxy); }
+    catch (err) { setError((err as Error).message); setBusy(false); }
+  };
+
+  return (
+    <Modal onClose={onClose} wide>
+      <form onSubmit={save}>
+        <h3 className="modal-title">Library access</h3>
+        <p className="muted small lib-help">
+          Margin finds free copies of papers by itself. For paywalled ones, it can give you a link that opens the paper through your university library:
+          you sign in with your university account, download the PDF, and drop it on the reference. Margin never sees your university password.
+        </p>
+        <label className="lib-field">
+          <span className="muted small">Your library's proxy link</span>
+          <input className="input sm mono" autoFocus placeholder="https://ezproxy.your-university.ac.th/login?url=" value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} />
+        </label>
+        <p className="muted small lib-help">
+          Find it on your library's website under off-campus or remote access (often called EZproxy or OpenAthens): it's the start of any link that opens a journal through the library.
+          If the paper's address goes in the middle, write <code>{"{url}"}</code> where it goes.
+        </p>
+        {example && <p className="small lib-help">A paper would open at: <a href={example} target="_blank" rel="noreferrer" className="mono">{example}</a></p>}
+        {error && <p className="error small">{error}</p>}
+        <div className="modal-actions">
+          {proxy && <button type="button" className="btn ghost" disabled={busy} onClick={async () => { setBusy(true); try { onSaved((await api.librarySettings("")).proxy); } catch (err) { setError((err as Error).message); setBusy(false); } }}>Remove</button>}
+          <div className="spacer" />
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={busy || !!checked.error || !value.trim()}>{busy ? <Spinner /> : "Save"}</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -280,8 +331,8 @@ function AddDialog({ projects, defaultProject, onClose, onDone }: { projects: Li
   );
 }
 
-function RefDetail({ ref_, projects, onClose, onSaved, onDeleted, onToast, onChanged }: {
-  ref_: LibraryRef; projects: LibraryView["projects"]; onClose(): void; onSaved(r: LibraryRef): void; onDeleted(): void; onToast(msg: string): void; onChanged(r: LibraryRef): void;
+function RefDetail({ ref_, projects, proxy, onClose, onSaved, onDeleted, onToast, onChanged }: {
+  ref_: LibraryRef; projects: LibraryView["projects"]; proxy?: string; onClose(): void; onSaved(r: LibraryRef): void; onDeleted(): void; onToast(msg: string): void; onChanged(r: LibraryRef): void;
 }) {
   const [key, setKey] = useState(ref_.key);
   const [type, setType] = useState(ref_.type);
@@ -324,7 +375,7 @@ function RefDetail({ ref_, projects, onClose, onSaved, onDeleted, onToast, onCha
         {!ref_.fields.doi && ref_.fields.url && <a className="btn tight" href={ref_.fields.url} target="_blank" rel="noreferrer">Open link</a>}
       </div>
 
-      <PaperFile ref_={ref_} onChanged={onChanged} onToast={onToast} />
+      <PaperFile ref_={ref_} proxy={proxy} onChanged={onChanged} onToast={onToast} />
       <SummaryNotes ref_={ref_} onChanged={onChanged} onToast={onToast} />
       <CitationHistory refId={ref_.id} />
 
@@ -372,7 +423,10 @@ function RefDetail({ ref_, projects, onClose, onSaved, onDeleted, onToast, onCha
 }
 
 /** The paper itself: open it, attach one, or look for a free copy. */
-function PaperFile({ ref_, onChanged, onToast }: { ref_: LibraryRef; onChanged(r: LibraryRef): void; onToast(msg: string): void }) {
+function PaperFile({ ref_, proxy, onChanged, onToast }: { ref_: LibraryRef; proxy?: string; onChanged(r: LibraryRef): void; onToast(msg: string): void }) {
+  const doi = normDoi(ref_.fields.doi);
+  const target = doi ? `https://doi.org/${doi}` : ref_.fields.url;
+  const libraryUrl = target ? viaProxy(proxy, target) : undefined;
   const [busy, setBusy] = useState<"find" | "attach" | null>(null);
   const [lookup, setLookup] = useState<PdfLookup | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -414,9 +468,10 @@ function PaperFile({ ref_, onChanged, onToast }: { ref_: LibraryRef; onChanged(r
         <>
           <div className="row gap">
             <button className="btn tight" disabled={!!busy} onClick={find}>{busy === "find" ? <Spinner /> : <Icon name="search" size={12} />}Find free PDF</button>
+            {libraryUrl && <a className="btn tight" href={libraryUrl} target="_blank" rel="noreferrer" title="Opens the paper through your university library's sign-in">Via your library<Icon name="external" size={11} /></a>}
             <button className="btn tight" disabled={!!busy} onClick={() => input.current?.click()}>{busy === "attach" ? <Spinner /> : <Icon name="upload" size={12} />}Attach PDF</button>
           </div>
-          <p className="muted small">Or drop the PDF here. Agents can read it once it's attached.</p>
+          <p className="muted small">{libraryUrl ? "Download it through your library, then drop the PDF here." : "Drop the PDF here once you have it."} Agents can read it once it's attached.</p>
         </>
       )}
       {lookup && !lookup.found && (

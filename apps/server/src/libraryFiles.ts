@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { normDoi, refTitle, type LibraryRef, type PdfLookup } from "@margin/shared";
+import { normDoi, refTitle, viaProxy, type LibraryRef, type PdfLookup } from "@margin/shared";
 import { DATA_DIR } from "./config.ts";
 import { HttpError } from "./storage.ts";
 
@@ -142,9 +142,13 @@ export function arxivId(fields: Record<string, string>) {
 }
 
 /** Where a person can get the paper when no free copy turns up. */
-function manualLinks(ref: Pick<LibraryRef, "fields">, landing?: string | null) {
+function manualLinks(ref: Pick<LibraryRef, "fields">, landing?: string | null, proxy?: string) {
   const doi = normDoi(ref.fields.doi);
   const links: PdfLookup["links"] = [];
+  // Through the university library's login first: that's the one that gets past the paywall.
+  const target = doi ? `https://doi.org/${doi}` : landing ?? ref.fields.url;
+  const viaLibrary = target && viaProxy(proxy, target);
+  if (viaLibrary) links.push({ label: "Through your university library", url: viaLibrary });
   if (doi) links.push({ label: "Publisher (via DOI)", url: `https://doi.org/${doi}` });
   if (landing && !links.some((l) => l.url === landing)) links.push({ label: "Publisher page", url: landing });
   if (ref.fields.url && !links.some((l) => l.url === ref.fields.url)) links.push({ label: "Link in the entry", url: ref.fields.url });
@@ -157,7 +161,7 @@ function manualLinks(ref: Pick<LibraryRef, "fields">, landing?: string | null) {
  * arXiv. Returns the PDF when found; otherwise links and a note on getting it
  * through an institution.
  */
-export async function findPdf(ref: Pick<LibraryRef, "fields">): Promise<PdfLookup & { data?: Buffer }> {
+export async function findPdf(ref: Pick<LibraryRef, "fields">, proxy?: string): Promise<PdfLookup & { data?: Buffer }> {
   const doi = normDoi(ref.fields.doi);
   let landing: string | null | undefined;
   if (doi) {
@@ -168,20 +172,22 @@ export async function findPdf(ref: Pick<LibraryRef, "fields">): Promise<PdfLooku
       .map((l) => l.pdf_url!);
     for (const url of [...new Set(candidates)].slice(0, 4)) {
       const data = await downloadPdf(url);
-      if (data) return { found: true, source: "openalex", from: url, links: manualLinks(ref, landing), data };
+      if (data) return { found: true, source: "openalex", from: url, links: manualLinks(ref, landing, proxy), data };
     }
   }
   const arxiv = arxivId(ref.fields);
   if (arxiv) {
     const url = `${ARXIV}/pdf/${arxiv}`;
     const data = await downloadPdf(url);
-    if (data) return { found: true, source: "arxiv", from: url, links: manualLinks(ref, landing), data };
+    if (data) return { found: true, source: "arxiv", from: url, links: manualLinks(ref, landing, proxy), data };
   }
   return {
     found: false,
-    links: manualLinks(ref, landing),
-    note: doi
-      ? "No open-access copy found. Download the PDF through your institution's access (sign in to the publisher via your library), then attach it to this reference."
-      : "No DOI or arXiv id to look it up by. Find the PDF yourself, then attach it to this reference.",
+    links: manualLinks(ref, landing, proxy),
+    note: !doi && !landing && !ref.fields.url
+      ? "No DOI or arXiv id to look it up by. Find the PDF yourself, then attach it to this reference."
+      : proxy
+        ? "No free copy found. Open it through your university library (you'll sign in with your university account), download the PDF, then attach it here."
+        : "No free copy found. Download the PDF with your university's access (on campus, on the university VPN, or through the library website), then attach it here. Tip: set your library's proxy link in Library settings to get a one-click link.",
   };
 }
