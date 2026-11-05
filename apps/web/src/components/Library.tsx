@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { byline, refTitle, refVenue, toBibtex, type LibraryRef, type LibraryView, type Session } from "@margin/shared";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { byline, refTitle, refVenue, toBibtex, USAGE_LABEL, type LibraryRef, type LibraryView, type PdfLookup, type Session, type UsageStatus, type UsageView } from "@margin/shared";
 import { api } from "../lib/api.ts";
+import { renderMarkdown } from "../lib/markdown.ts";
 import { navigate } from "../lib/router.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Modal } from "./Dialog.tsx";
@@ -15,16 +16,33 @@ const EDIT_FIELDS: [string, string][] = [
   ["volume", "Volume"], ["number", "Number"], ["pages", "Pages"], ["publisher", "Publisher"], ["doi", "DOI"], ["url", "URL"],
 ];
 
-export function Library({ section, session }: { section: Section; session: Session }) {
+type Usage = UsageView["records"][number];
+const STATUS_ORDER: UsageStatus[] = ["cited", "formerly-cited", "bibliography-only", "dropped"];
+/** The most telling status among a reference's records: cited beats formerly cited, and so on. */
+const bestStatus = (records: Usage[]) => STATUS_ORDER.find((s) => records.some((r) => r.status === s));
+
+export function Library({ section, doc, initialRef, session }: { section: Section; doc?: string; initialRef?: string; session: Session }) {
   const [view, setView] = useState<LibraryView | null>(null);
+  const [usage, setUsage] = useState<UsageView | null>(null);
+  const [status, setStatus] = useState<UsageStatus | "all">("all");
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialRef ?? null);
   const [adding, setAdding] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const reload = () => api.library().then(setView).catch((e) => setError(e.message));
   useEffect(() => { void reload(); }, []);
+  const inProject = section !== undefined && section !== "none";
+  useEffect(() => {
+    setUsage(null);
+    api.libraryUsage(inProject ? { project: section } : {}).then(setUsage).catch(() => {});
+  }, [section]);
+  useEffect(() => { if (initialRef) setSelected(initialRef); }, [initialRef]);
+  useEffect(() => { setStatus("all"); }, [section, doc]);
+
+  /** This reference's records in the current scope (project, and document if one is chosen). */
+  const scoped = (r: LibraryRef) => usage?.records.filter((u) => u.refId === r.id && (!inProject || u.projectId === section) && (!doc || u.document === doc)) ?? [];
   useEffect(() => {
     if (!toast) return;
     const t = window.setTimeout(() => setToast(null), 3000);
@@ -32,16 +50,31 @@ export function Library({ section, session }: { section: Section; session: Sessi
   }, [toast]);
 
   const projectName = (id: string) => view?.projects.find((p) => p.id === id)?.name ?? id;
-  const inSection = (r: LibraryRef) => section === undefined ? true : section === "none" ? r.projects.length === 0 : r.projects.includes(section);
+  const inSection = (r: LibraryRef) => {
+    if (section === undefined) return true;
+    if (section === "none") return r.projects.length === 0;
+    const mine = scoped(r);
+    if (doc) return mine.length > 0;
+    return r.projects.includes(section) || mine.length > 0;
+  };
+  const inStatus = (r: LibraryRef) => status === "all" || scoped(r).some((u) => u.status === status);
 
   const shown = useMemo(() => {
     if (!view) return [];
     const q = query.trim().toLowerCase();
     return view.refs
       .filter(inSection)
-      .filter((r) => !q || [r.key, r.fields.title, r.fields.author, r.fields.year, r.fields.journal, r.fields.booktitle, r.fields.doi].some((v) => v?.toLowerCase().includes(q)))
-      .sort((a, b) => b.addedAt.localeCompare(a.addedAt));
-  }, [view, query, section]);
+      .filter(inStatus)
+      .filter((r) => !q || [r.key, r.fields.title, r.fields.author, r.fields.year, r.fields.journal, r.fields.booktitle, r.fields.doi, ...(r.tags ?? [])].some((v) => v?.toLowerCase().includes(q)))
+      .sort((a, b) => {
+        // In a paper, order by the key it cites them with (ref1, ref2 … ref10); elsewhere newest first.
+        const ka = scoped(a)[0]?.key, kb = scoped(b)[0]?.key;
+        return inProject && ka && kb ? ka.localeCompare(kb, undefined, { numeric: true }) : b.addedAt.localeCompare(a.addedAt);
+      });
+  }, [view, usage, query, section, doc, status]);
+
+  const statusCount = (s: UsageStatus | "all") => view?.refs.filter(inSection).filter((r) => s === "all" || scoped(r).some((u) => u.status === s)).length ?? 0;
+  const docsOf = (projectId: string) => usage?.documents.filter((d) => d.projectId === projectId) ?? [];
 
   const current = view?.refs.find((r) => r.id === selected) ?? null;
   const count = (s: Section) => view?.refs.filter((r) => s === undefined ? true : s === "none" ? !r.projects.length : r.projects.includes(s)).length ?? 0;
@@ -66,7 +99,16 @@ export function Library({ section, session }: { section: Section; session: Sessi
           <NavItem active={section === "none"} onClick={() => navigate({ name: "library", project: "none" })} icon="bookmark" label="Not in a paper" n={count("none")} />
           <div className="section-label lib-nav-gap">Papers</div>
           {view?.projects.map((p) => (
-            <NavItem key={p.id} active={section === p.id} onClick={() => navigate({ name: "library", project: p.id })} icon="file" label={p.name} n={count(p.id)} />
+            <div key={p.id}>
+              <NavItem active={section === p.id && !doc} onClick={() => navigate({ name: "library", project: p.id })} icon="file" label={p.name} n={count(p.id)} />
+              {section === p.id && docsOf(p.id).length > 1 && docsOf(p.id).map((d) => (
+                <button key={d.path} className={`lib-nav-item lib-nav-doc ${doc === d.path ? "active" : ""}`} title={d.path}
+                  onClick={() => navigate({ name: "library", project: p.id, doc: d.path })}>
+                  <span className="grow ellipsis">{d.title}</span>
+                  <span className="muted small">{usage?.records.filter((u) => u.projectId === p.id && u.document === d.path).length ?? ""}</span>
+                </button>
+              ))}
+            </div>
           ))}
           {view && !view.projects.length && <p className="muted small">No papers yet.</p>}
         </nav>
@@ -76,10 +118,24 @@ export function Library({ section, session }: { section: Section; session: Sessi
           {!view && !error && <div className="empty"><Spinner /></div>}
           {view && section && section !== "none" && (
             <div className="lib-section-head">
-              <h2>{projectName(section)}</h2>
+              <h2>{projectName(section)}{doc && <span className="muted"> › {usage?.documents.find((d) => d.projectId === section && d.path === doc)?.title ?? doc}</span>}</h2>
               <div className="spacer" />
               <ImportPaperButton projectId={section} onDone={(msg) => { setToast(msg); void reload(); }} />
               <button className="btn ghost" onClick={() => navigate({ name: "project", id: section })}>Open paper</button>
+            </div>
+          )}
+          {view && inProject && (
+            <div className="lib-filters" role="tablist" aria-label="Filter by citation status">
+              {(["all", "cited", "formerly-cited", "bibliography-only", "dropped"] as const).map((s) => {
+                const n = statusCount(s);
+                if (s !== "all" && s !== status && !n) return null;
+                return (
+                  <button key={s} role="tab" aria-selected={status === s} className={`chip ${status === s ? "active" : ""}`} onClick={() => setStatus(s)}>
+                    {s === "all" ? "All" : USAGE_LABEL[s]} <span className="muted">{n}</span>
+                  </button>
+                );
+              })}
+              {!usage && <Spinner />}
             </div>
           )}
           {view && !view.refs.length && (
@@ -105,8 +161,19 @@ export function Library({ section, session }: { section: Section; session: Sessi
                     <span className="muted small">{[byline(r.fields), refVenue(r.fields)].filter(Boolean).join(" · ")}</span>
                   </span>
                   <span className="lib-row-projects">
-                    {r.projects.slice(0, 2).map((p) => <span key={p} className="chip subtle">{projectName(p)}</span>)}
-                    {r.projects.length > 2 && <span className="chip subtle">+{r.projects.length - 2}</span>}
+                    {inProject ? (() => {
+                      const mine = scoped(r);
+                      const best = bestStatus(mine);
+                      return <>
+                        {mine[0] && mine[0].key !== r.key && <span className="key-chip subtle" title="Key in this paper">{mine[0].key}</span>}
+                        {best && <span className={`chip status-${best}`}>{USAGE_LABEL[best]}</span>}
+                      </>;
+                    })() : <>
+                      {r.projects.slice(0, 2).map((p) => <span key={p} className="chip subtle">{projectName(p)}</span>)}
+                      {r.projects.length > 2 && <span className="chip subtle">+{r.projects.length - 2}</span>}
+                    </>}
+                    {r.summary && <span className={`chip subtle ${r.summary.status === "verified" ? "" : "warn"}`} title={`Summary: ${r.summary.status}`}>{r.summary.status === "verified" ? "Notes" : "Draft notes"}</span>}
+                    <span title={r.pdf ? `PDF, ${r.pdf.pages} pages` : "No PDF yet"} className={r.pdf ? "" : "lib-faint"}><Icon name="pdf" size={14} /></span>
                   </span>
                 </button>
               ))}
@@ -118,6 +185,7 @@ export function Library({ section, session }: { section: Section; session: Sessi
           <RefDetail key={current.id} ref_={current} projects={view.projects} onClose={() => setSelected(null)}
             onSaved={(r) => { replace(r); setToast("Saved"); }}
             onDeleted={() => { setView((v) => v && { ...v, refs: v.refs.filter((r) => r.id !== current.id) }); setSelected(null); }}
+            onChanged={replace}
             onToast={setToast} />
         )}
       </div>
@@ -212,8 +280,8 @@ function AddDialog({ projects, defaultProject, onClose, onDone }: { projects: Li
   );
 }
 
-function RefDetail({ ref_, projects, onClose, onSaved, onDeleted, onToast }: {
-  ref_: LibraryRef; projects: LibraryView["projects"]; onClose(): void; onSaved(r: LibraryRef): void; onDeleted(): void; onToast(msg: string): void;
+function RefDetail({ ref_, projects, onClose, onSaved, onDeleted, onToast, onChanged }: {
+  ref_: LibraryRef; projects: LibraryView["projects"]; onClose(): void; onSaved(r: LibraryRef): void; onDeleted(): void; onToast(msg: string): void; onChanged(r: LibraryRef): void;
 }) {
   const [key, setKey] = useState(ref_.key);
   const [type, setType] = useState(ref_.type);
@@ -256,6 +324,11 @@ function RefDetail({ ref_, projects, onClose, onSaved, onDeleted, onToast }: {
         {!ref_.fields.doi && ref_.fields.url && <a className="btn tight" href={ref_.fields.url} target="_blank" rel="noreferrer">Open link</a>}
       </div>
 
+      <PaperFile ref_={ref_} onChanged={onChanged} onToast={onToast} />
+      <SummaryNotes ref_={ref_} onChanged={onChanged} onToast={onToast} />
+      <CitationHistory refId={ref_.id} />
+
+      <div className="section-label lib-detail-gap">Details</div>
       {EDIT_FIELDS.map(([f, label]) => (
         <label key={f} className="lib-field">
           <span className="muted small">{label}</span>
@@ -295,5 +368,132 @@ function RefDetail({ ref_, projects, onClose, onSaved, onDeleted, onToast }: {
         <button className="btn primary" disabled={!dirty || busy} onClick={save}>{busy ? <Spinner /> : "Save"}</button>
       </div>
     </aside>
+  );
+}
+
+/** The paper itself: open it, attach one, or look for a free copy. */
+function PaperFile({ ref_, onChanged, onToast }: { ref_: LibraryRef; onChanged(r: LibraryRef): void; onToast(msg: string): void }) {
+  const [busy, setBusy] = useState<"find" | "attach" | null>(null);
+  const [lookup, setLookup] = useState<PdfLookup | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  const attach = async (file?: File | null) => {
+    if (!file) return;
+    if (file.type && file.type !== "application/pdf") { setError("That isn't a PDF"); return; }
+    setBusy("attach"); setError(null);
+    try { onChanged(await api.libraryAttachPdf(ref_.id, file)); setLookup(null); onToast("PDF attached"); }
+    catch (e) { setError((e as Error).message); }
+    setBusy(null);
+  };
+  const find = async () => {
+    setBusy("find"); setError(null);
+    try {
+      const r = await api.libraryFindPdf(ref_.id);
+      onChanged(r.ref);
+      setLookup(r.found ? null : r);
+      if (r.found) onToast("Found a free copy and attached it");
+    } catch (e) { setError((e as Error).message); }
+    setBusy(null);
+  };
+
+  return (
+    <div className={`lib-paper ${over ? "over" : ""}`}
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); void attach(e.dataTransfer.files[0]); }}>
+      <div className="section-label">Paper</div>
+      {ref_.pdf ? (
+        <div className="row gap">
+          <a className="btn tight" href={api.libraryPdfUrl(ref_.id)} target="_blank" rel="noreferrer"><Icon name="pdf" size={13} />Open PDF</a>
+          <span className="muted small">{ref_.pdf.pages} pages · {relativeTime(ref_.pdf.addedAt)}</span>
+          <div className="spacer" />
+          <button className="btn ghost tight" title="Replace with another file" onClick={() => input.current?.click()}>Replace</button>
+        </div>
+      ) : (
+        <>
+          <div className="row gap">
+            <button className="btn tight" disabled={!!busy} onClick={find}>{busy === "find" ? <Spinner /> : <Icon name="search" size={12} />}Find free PDF</button>
+            <button className="btn tight" disabled={!!busy} onClick={() => input.current?.click()}>{busy === "attach" ? <Spinner /> : <Icon name="upload" size={12} />}Attach PDF</button>
+          </div>
+          <p className="muted small">Or drop the PDF here. Agents can read it once it's attached.</p>
+        </>
+      )}
+      {lookup && !lookup.found && (
+        <div className="lib-lookup">
+          <p className="small">{lookup.note}</p>
+          <ul>{lookup.links.map((l) => <li key={l.url}><a href={l.url} target="_blank" rel="noreferrer">{l.label}<Icon name="external" size={11} /></a></li>)}</ul>
+        </div>
+      )}
+      {error && <p className="error small">{error}</p>}
+      <input ref={input} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { void attach(e.target.files?.[0]); e.target.value = ""; }} />
+    </div>
+  );
+}
+
+/** Notes on the paper: a TL;DR first (it shows on hover in the PDF preview), then anything else. */
+function SummaryNotes({ ref_, onChanged, onToast }: { ref_: LibraryRef; onChanged(r: LibraryRef): void; onToast(msg: string): void }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(ref_.summary?.markdown ?? "");
+  const [busy, setBusy] = useState(false);
+  const html = useMemo(() => (ref_.summary ? renderMarkdown(ref_.summary.markdown) : ""), [ref_.summary?.markdown]);
+
+  const save = async (patch: { summary?: string; summaryStatus?: "ai-draft" | "verified" }) => {
+    setBusy(true);
+    try { onChanged(await api.libraryUpdate(ref_.id, patch)); setEditing(false); onToast("Saved"); }
+    catch (e) { onToast((e as Error).message); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="lib-summary">
+      <div className="row gap">
+        <div className="section-label">Summary</div>
+        {ref_.summary && <span className={`chip ${ref_.summary.status === "verified" ? "" : "warn"}`} title={ref_.summary.status === "ai-draft" ? "Written from the abstract; check the paper before quoting numbers" : `Checked by ${ref_.summary.updatedBy}`}>{ref_.summary.status === "verified" ? "Verified" : "AI draft"}</span>}
+        <div className="spacer" />
+        {!editing && ref_.summary?.status === "ai-draft" && <button className="btn ghost tight" disabled={busy} onClick={() => save({ summaryStatus: "verified" })}>Mark verified</button>}
+        {!editing && <button className="btn ghost tight" onClick={() => { setText(ref_.summary?.markdown ?? "> **TL;DR.** \n"); setEditing(true); }}>{ref_.summary ? "Edit" : "Write"}</button>}
+      </div>
+      {editing ? (
+        <>
+          <textarea className="notes lib-area mono lib-summary-edit" value={text} onChange={(e) => setText(e.target.value)} autoFocus />
+          <div className="row gap">
+            <div className="spacer" />
+            <button className="btn ghost tight" onClick={() => setEditing(false)}>Cancel</button>
+            <button className="btn primary tight" disabled={busy} onClick={() => save({ summary: text })}>{busy ? <Spinner /> : "Save"}</button>
+          </div>
+        </>
+      ) : ref_.summary
+        ? <article className="md lib-summary-body" dangerouslySetInnerHTML={{ __html: html }} />
+        : <p className="muted small">No notes yet. Ask an agent to read the paper and write them (update_reference_summary).</p>}
+    </div>
+  );
+}
+
+/** Every document that cites, cited, or lists this reference. */
+function CitationHistory({ refId }: { refId: string }) {
+  const [records, setRecords] = useState<Usage[] | null>(null);
+  useEffect(() => { api.libraryUsage({ ref: refId }).then((u) => setRecords(u.records)).catch(() => setRecords([])); }, [refId]);
+  const day = (iso?: string) => (iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "");
+  return (
+    <div className="lib-history">
+      <div className="section-label">Citation history</div>
+      {records === null ? <Spinner /> : !records.length ? <p className="muted small">Not in any document yet.</p> : (
+        <ul>
+          {records.sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status)).map((u) => (
+            <li key={`${u.projectId}:${u.document}`}>
+              <button className="lib-history-doc" onClick={() => navigate({ name: "library", project: u.projectId, doc: u.document, ref: refId })}>
+                <span className="ellipsis">{u.projectName} › {u.documentTitle}</span>
+              </button>
+              <span className={`chip status-${u.status}`}>{USAGE_LABEL[u.status]}</span>
+              <span className="muted small">
+                <code>\cite{"{"}{u.key}{"}"}</code>{" "}
+                {u.status === "cited" ? `since ${day(u.firstCited)}` : u.lastCited ? `${day(u.firstCited)} – ${day(u.lastCited)}` : `listed since ${day(u.firstSeen)}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

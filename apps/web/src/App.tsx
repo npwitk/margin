@@ -34,7 +34,7 @@ export function App() {
   if (session === undefined) return <div className="center-screen"><Spinner size={20} /></div>;
   if (!session) return <Login methods={methods} onLogin={setSession} />;
   if (route.name === "join") return <JoinProject id={route.id} token={route.token} />;
-  if (route.name === "library") return <Library section={route.project} session={session} />;
+  if (route.name === "library") return <Library section={route.project} doc={route.doc} initialRef={route.ref} session={session} />;
   if (route.name === "project") return <Workspace key={route.id} projectId={route.id} session={session} />;
   return <Projects session={session} onLogout={() => setSession(null)} />;
 }

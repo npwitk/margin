@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isTextPath, type OutlineEntry, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions, type WorkspaceView } from "@margin/shared";
+import { isTextPath, type OutlineEntry, type AiSettings, type CompileResult, type Diagnostic, type DocumentInfo, type Engine, type FileEntry, type Project, type Session, type SyncTexForward, type CiteOptions, type CiteCard, type WorkspaceView } from "@margin/shared";
 import { DocumentSwitcher, NewDocumentDialog, type NewDocumentInput } from "./DocumentSwitcher.tsx";
 import { api } from "../lib/api.ts";
 import { useCollab, usePeers, type Peer } from "../lib/collab.ts";
@@ -95,6 +95,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [advisor, setAdvisor] = useState(false);
   useEffect(() => { api.access(projectId).then((a) => setAdvisor(a.you?.role === "advisor")).catch(() => {}); }, [projectId]);
   const [previewTab, setPreviewTab] = useState<"pdf" | "assistant" | "citations">(() => load("previewTab", "pdf"));
+  /** A cited paper's PDF (from the library), shown in place of your own until you go back. */
+  const [paper, setPaper] = useState<{ refId: string; title: string; label: string } | null>(null);
+  const [citeCards, setCiteCards] = useState<CiteCard[]>([]);
+  const [citeMapVersion, setCiteMapVersion] = useState(0);
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [assistantRequest, setAssistantRequest] = useState<{ text: string; key: number }>();
@@ -535,6 +539,15 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   // ── Outline (table of contents) ──────────────────────────────────────────
   const outlineDoc = activeDoc && (docs.length === 0 || docs.some((d) => d.path === activeDoc)) ? activeDoc : project?.mainFile ?? null;
   const outlineWanted = (sidebar && sideTab === "outline" && view === "write") || paletteOpen;
+
+  // What each printed citation points to, for hover cards in the PDF and the editor. Refreshed with every new PDF.
+  const citePdfVersion = outlineDoc ? pdfVersions[outlineDoc] ?? 0 : 0;
+  useEffect(() => {
+    if (!outlineDoc || !citePdfVersion) { setCiteCards([]); return; }
+    let cancelled = false;
+    api.citeMap(projectId, outlineDoc).then((c) => { if (!cancelled) setCiteCards(c); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, outlineDoc, citePdfVersion, citeMapVersion]);
   useEffect(() => {
     if (!outlineWanted || !outlineDoc) return;
     let cancelled = false;
@@ -736,6 +749,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const currentDoc = activeDoc && (docs.length === 0 || docs.some((d) => d.path === activeDoc)) ? activeDoc : project.mainFile;
   const result = results[currentDoc] ?? null;
   const pdfVersion = pdfVersions[currentDoc] ?? 0;
+  const citeActions = { projectId, onOpenPdf: (c: CiteCard) => c.refId && setPaper({ refId: c.refId, title: c.title, label: c.authorYear ?? `[${c.label}]` }), onChanged: () => setCiteMapVersion((v) => v + 1) };
   const errors = result?.diagnostics.filter((d) => d.severity === "error").length ?? 0;
   const warnings = result?.diagnostics.filter((d) => d.severity === "warning").length ?? 0;
   const binaryOpen = openPath && !isTextPath(openPath) ? openPath : null;
@@ -918,6 +932,9 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     readOnly={advisor}
                     onConflicts={(file, n) => { if (!n && collab?.conflicts.has(file)) collab.conflicts.delete(file); }}
                     citeOptions={citeOptions}
+                    citeCards={citeCards}
+                    onCiteOpenPdf={(c) => { setPreviewTab("pdf"); citeActions.onOpenPdf(c); }}
+                    onCiteOpenLibrary={(c) => navigate({ name: "library", project: projectId, ref: c.refId })}
                     onLibraryCite={libraryCite}
                   />
                 </div>
@@ -960,7 +977,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               <button className={previewTab === "citations" ? "active" : ""} onClick={() => setPreviewTab("citations")}>Citations</button>
               </div>
             </div>
-            <div className="preview-body sweepable" hidden={previewTab !== "pdf"}>
+            <div className="preview-body sweepable" hidden={previewTab !== "pdf" || !!paper}>
               <Sweep signal={pdfSweep} />
               <PdfViewer
                 onRendered={onPdfRendered}
@@ -968,8 +985,22 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                 highlight={highlight}
                 onInverse={(pg, x, y) => void inverseSync(pg, x, y)}
                 emptyMessage={compiling ? "Compiling…" : errors ? "Fix the errors to see a PDF" : "Compile to see your paper"}
+                citations={citeCards}
+                citeActions={citeActions}
               />
             </div>
+            {paper && previewTab === "pdf" && (
+              <div className="preview-body cited-paper">
+                <div className="cited-paper-bar">
+                  <button className="btn ghost tight" onClick={() => setPaper(null)}><Icon name="back" size={12} />Your paper</button>
+                  <span className="cite-label">{paper.label}</span>
+                  <span className="ellipsis small" title={paper.title}>{paper.title}</span>
+                  <div className="spacer" />
+                  <a className="icon-btn" href={api.libraryPdfUrl(paper.refId)} target="_blank" rel="noreferrer" title="Open in a new tab"><Icon name="external" size={13} /></a>
+                </div>
+                <PdfViewer url={api.libraryPdfUrl(paper.refId)} />
+              </div>
+            )}
             <div className="preview-body" hidden={previewTab !== "assistant"}>
               <AssistantPanel projectId={projectId} session={session} settings={aiSettings} request={assistantRequest} doc={currentDoc}
                 onOpenSettings={() => setAiSettingsOpen(true)} onOpenSuggestion={openSuggestion}
