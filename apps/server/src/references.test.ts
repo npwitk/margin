@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { citeLabels, parseBibcite, summaryTldr, usageStatus } from "@margin/shared";
+import { checkProxy, citeLabels, parseBibcite, summaryTldr, usageStatus, viaProxy } from "@margin/shared";
 
 process.env.DATA_DIR = await mkdtemp(path.join(tmpdir(), "margin-refs-"));
+// No network in tests: the open-access lookups find nothing.
+process.env.OPENALEX_API_URL = "http://127.0.0.1:9";
+process.env.ARXIV_URL = "http://127.0.0.1:9";
 const storage = await import("./storage.ts");
 const { runTool, agentToolList } = await import("./ai/tools.ts");
 const { flushProject } = await import("./collab.ts");
@@ -13,6 +16,7 @@ const { refreshUsage, usageRecords, observe } = await import("./citeUsage.ts");
 const { citeMap, load } = await import("./library.ts");
 const { pdfPathOf } = await import("./documents.ts");
 const { fieldsFromFrontMatter } = await import("./referenceImport.ts");
+const { findPdf } = await import("./libraryFiles.ts");
 
 const session = { name: "Alice", agent: "Claude Code" };
 const ctx = (projectId: string) => ({ projectId, session, agentName: "Claude Code", key: "ext-alice", status() {} });
@@ -149,4 +153,23 @@ test("a project's references: import a Reference/ folder, read, summarise, track
 test("the reference tools are offered to agents", () => {
   const names = agentToolList().map((t) => t.name);
   for (const n of ["list_references", "get_reference", "add_reference", "find_pdf", "read_reference", "update_reference_summary", "citation_report", "import_reference_folder"]) assert.ok(names.includes(n), n);
+});
+
+test("paywalled papers: a link through the university library's proxy comes first", async () => {
+  assert.equal(viaProxy("https://ezproxy.tu.ac.th/login?url=", "https://doi.org/10.1/x"), "https://ezproxy.tu.ac.th/login?url=https://doi.org/10.1/x");
+  assert.equal(viaProxy("https://go.openathens.net/redirector/tu.ac.th?url={url}", "https://doi.org/10.1/x"), "https://go.openathens.net/redirector/tu.ac.th?url=https%3A%2F%2Fdoi.org%2F10.1%2Fx");
+  assert.equal(viaProxy(undefined, "https://doi.org/10.1/x"), undefined);
+  assert.ok(checkProxy("ezproxy.tu.ac.th").error);
+  assert.deepEqual(checkProxy(""), {});
+
+  const ref = { fields: { title: "Verifiable storage", doi: "10.1007/s00607-025-01500-1" } };
+  const plain = await findPdf(ref);
+  assert.equal(plain.found, false);
+  assert.equal(plain.links[0].label, "Publisher (via DOI)");
+  assert.match(plain.note!, /university's access/);
+  assert.doesNotMatch(plain.note!, /sign in to the publisher/);
+
+  const proxied = await findPdf(ref, "https://ezproxy.tu.ac.th/login?url=");
+  assert.deepEqual(proxied.links[0], { label: "Through your university library", url: "https://ezproxy.tu.ac.th/login?url=https://doi.org/10.1007/s00607-025-01500-1" });
+  assert.match(proxied.note!, /through your university library/);
 });

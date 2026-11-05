@@ -47,7 +47,8 @@ function OneCard({ card, actions }: { card: CiteCard; actions: CiteActions }) {
       {card.tldr && <p className="cite-tldr small">{card.tldr}</p>}
       <div className="cite-actions">
         {card.hasPdf && card.refId && <button className="btn tight" onClick={() => actions.onOpenPdf(card)}><Icon name="pdf" size={12} />Open PDF</button>}
-        {!card.hasPdf && card.refId && <button className="btn tight" disabled={busy} onClick={find}>{busy ? <Spinner /> : <Icon name="search" size={12} />}Find PDF</button>}
+        {!card.hasPdf && card.libraryUrl && <a className="btn tight" href={card.libraryUrl} target="_blank" rel="noreferrer" title="Opens the paper through your university library's sign-in">Via your library<Icon name="external" size={11} /></a>}
+        {!card.hasPdf && card.refId && <button className="btn tight" disabled={busy} onClick={find}>{busy ? <Spinner /> : <Icon name="search" size={12} />}Find free PDF</button>}
         {card.refId && <button className="btn ghost tight" onClick={() => navigate({ name: "library", project: actions.projectId, ref: card.refId })}><Icon name="book" size={12} />Library</button>}
         {card.doi && <a className="btn ghost tight" href={`https://doi.org/${card.doi}`} target="_blank" rel="noreferrer">DOI<Icon name="external" size={11} /></a>}
         {!card.doi && card.url && <a className="btn ghost tight" href={card.url} target="_blank" rel="noreferrer">Link<Icon name="external" size={11} /></a>}

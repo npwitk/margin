@@ -94,6 +94,8 @@ export interface CiteCard {
   tldr?: string;
   refId?: string;
   hasPdf?: boolean;
+  /** No PDF yet: the paper's link through the university library's proxy, when one is set. */
+  libraryUrl?: string;
 }
 
 /** Result of looking for a free copy of a paper. */
@@ -110,6 +112,27 @@ export interface LibraryView {
   refs: LibraryRef[];
   /** Projects you can open, for the library's sections. */
   projects: { id: string; name: string }[];
+  /** The university library's proxy link, for opening paywalled papers through its login. */
+  proxy?: string;
+}
+
+/**
+ * A paper's link opened through a library proxy. EZproxy-style prefixes
+ * ("https://ezproxy.uni.ac.th/login?url=") get the URL appended; a template
+ * with {url} gets it substituted.
+ */
+export function viaProxy(proxy: string | undefined, url: string) {
+  if (!proxy) return undefined;
+  return proxy.includes("{url}") ? proxy.replace("{url}", encodeURIComponent(url)) : `${proxy}${url}`;
+}
+
+/** Check a proxy link someone typed; returns the cleaned value or an error message. */
+export function checkProxy(raw: string): { proxy?: string; error?: string } {
+  const proxy = raw.trim();
+  if (!proxy) return {};
+  if (!/^https?:\/\/[^\s/]+\.[^\s/]+/i.test(proxy)) return { error: "Paste the full proxy link, starting with https://" };
+  if (/\s/.test(proxy)) return { error: "The link can't contain spaces" };
+  return { proxy };
 }
 
 export interface LibraryAddResult {
