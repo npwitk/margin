@@ -57,15 +57,6 @@ export async function roleOf(projectId: string, s: Session): Promise<MemberRole 
   return role ?? (ACCESS_MODE === "workspace" && !(await isGuest(s)) ? "editor" : null);
 }
 
-export async function canEdit(projectId: string, s: Session) {
-  const role = await roleOf(projectId, s);
-  return role === "owner" || role === "editor";
-}
-
-export async function requireEdit(projectId: string, s: Session) {
-  if (!(await canEdit(projectId, s))) throw new HttpError(403, "Advisors can read and comment but not change files. Ask an owner to make you an editor (Share).");
-}
-
 export async function requireAccess(projectId: string, s: Session) {
   if (!(await canAccess(projectId, s))) throw new HttpError(404, "Project not found");
 }

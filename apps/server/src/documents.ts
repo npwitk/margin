@@ -1,7 +1,7 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
-  DOCUMENT_TEMPLATES, documentClassOf, documentTitleOf, isTextPath,
+  DOCUMENT_TEMPLATES, SHARED_DIR, documentClassOf, documentTitleOf, isTextPath,
   type DocumentInfo, type DocumentSettings, type DocumentTemplate, type Engine, type Project, type Session,
   templateById,
 } from "@margin/shared";
@@ -34,7 +34,8 @@ const stripComments = (tex: string) => tex.replace(/(^|[^\\])%.*$/gm, "$1");
  * Every project file a document uses: the \input/\include tree, figures
  * (honouring \graphicspath and \svgpath), .bib files, local classes, styles and
  * bibliography styles, and listings. Paths resolve the way TeX does: from the
- * document's folder first, then from the including file's folder.
+ * document's folder first, then from the including file's folder, then from
+ * the project's shared/ folder (the compiler puts it on TeX's search path).
  */
 export async function documentFiles(projectId: string, doc: string, all: Set<string>): Promise<string[]> {
   const mainDir = path.posix.dirname(doc);
@@ -45,7 +46,7 @@ export async function documentFiles(projectId: string, doc: string, all: Set<str
   const resolve = (from: string, name: string, exts: string[]) => {
     const n = name.trim().replace(/^"|"$/g, "");
     if (!n || n.startsWith("/") || /[{}\\#]/.test(n)) return null;
-    for (const base of [mainDir, path.posix.dirname(from), "."]) {
+    for (const base of [mainDir, path.posix.dirname(from), SHARED_DIR, "."]) {
       for (const ext of exts) {
         const cand = norm(path.posix.join(base, n + (n.toLowerCase().endsWith(ext) ? "" : ext)));
         if (!cand.startsWith("..") && all.has(cand)) return cand;
@@ -162,13 +163,12 @@ export async function renameDocuments(projectId: string, moved: (p: string) => s
 
 const esc = (s: string) => s.replace(/[\\{}$&#^_%~]/g, (ch) => `\\${ch}`);
 
-/** Project resources a new document next to `dir` can use (LaTeX can't read ../ paths in the sandbox). */
-async function resources(projectId: string, dir: string) {
-  const files = (await textFiles(projectId)).map((f) => f.path).filter((f) => !SKIP.test(f));
-  const inDir = (f: string) => dir === "." || f.startsWith(`${dir}/`);
-  const rel = (f: string) => path.posix.relative(dir, f);
-  const bibs = files.filter((f) => f.endsWith(".bib") && inDir(f)).map((f) => rel(f).replace(/\.bib$/, ""));
-  const macros = files.filter((f) => inDir(f) && /(^|\/)(macros|preamble|defs|commands|shortcuts)\.(tex|sty)$/i.test(f)).map(rel);
+/** What a new document can pick up from the project's shared/ folder: its .bib files and macros, by name. */
+async function sharedResources(projectId: string) {
+  const files = (await textFiles(projectId)).map((f) => f.path).filter((f) => f.startsWith(`${SHARED_DIR}/`) && !SKIP.test(f));
+  const rel = (f: string) => path.posix.relative(SHARED_DIR, f);
+  const bibs = files.filter((f) => f.endsWith(".bib")).map((f) => rel(f).replace(/\.bib$/, ""));
+  const macros = files.filter((f) => /(^|\/)(macros|preamble|defs|commands|shortcuts)\.(tex|sty)$/i.test(f)).map(rel);
   return { bibs, macros };
 }
 
@@ -321,84 +321,92 @@ export async function unusedFolder(projectId: string, base: string) {
   return name;
 }
 
+/** The folder a document lives in, and whether another document already lives there. */
+async function folderHasDocument(projectId: string, dir: string) {
+  return (await listDocuments(projectId)).some((d) => path.posix.dirname(d.path) === dir);
+}
+
 /**
- * Create a new document.
- * - layout "folder" (what people pick in the UI): a self-contained folder of
- *   its own (main.tex, sections/, figures/, refs.bib), like a separate paper.
- * - layout "beside" (the default for agents): one .tex next to the default
- *   document, reusing its .bib, macros and figures (the sandbox can't read ../).
- * - copyFrom: start from a copy of an existing document's folder, e.g. a
+ * Create a new document, always in a folder of its own (one document per
+ * folder), so documents never clash. Files several documents use go in the
+ * project's shared/ folder; the new document picks up shared .bib files and
+ * macros by name.
+ * - `path`: a folder name ("journal"), or a .tex path ("letters/rebuttal.tex")
+ *   whose folder doesn't hold another document yet. Default: a folder named
+ *   after the title, with main.tex.
+ * - `copyFrom`: start from a copy of an existing document's folder, e.g. a
  *   journal version of a conference paper.
  * `content` (from an agent) replaces the template.
  */
 export async function createDocument(projectId: string, input: {
-  title?: string; template?: string; path?: string; content?: string; engine?: Engine; layout?: "folder" | "beside"; copyFrom?: string;
+  title?: string; template?: string; path?: string; content?: string; engine?: Engine; copyFrom?: string;
 }) {
   const project = await getProject(projectId);
-  // A gallery template (ACM, NeurIPS, Metropolis…) in its own folder, or one of the generated ones.
+  // A gallery template (ACM, NeurIPS, Metropolis…), or one of the generated ones.
   const gallery = DOCUMENT_TEMPLATES.some((t) => t.id === input.template) ? undefined : templateById(input.template ?? "");
   const template = (DOCUMENT_TEMPLATES.some((t) => t.id === input.template) ? input.template : gallery?.beside ?? "article") as DocumentTemplate;
   const title = (input.title ?? "").trim().slice(0, 120) || (input.copyFrom ? `Copy of ${path.posix.basename(path.posix.dirname(input.copyFrom)) || "document"}` : DOCUMENT_TEMPLATES.find((t) => t.id === template)!.label);
-  let target: string;
 
-  if (input.copyFrom || input.layout === "folder") {
-    const folder = await unusedFolder(projectId, input.path?.trim().replace(/^\/+|\/+$/g, "").replace(/\.tex$/, "") || slug(title));
-    resolvePath(projectId, folder);
-    if (input.copyFrom) {
-      // A copy of another document: its whole folder, or (for a document at the top level) just the files it uses.
-      const src = (await resolveDocument(projectId, input.copyFrom)).path;
-      const srcDir = path.posix.dirname(src);
-      const all = await listFiles(projectId);
-      const files = srcDir === "."
-        ? await documentFiles(projectId, src, new Set(all.filter((f) => f.type === "file").map((f) => f.path)))
-        : all.filter((f) => f.type === "file" && f.path.startsWith(`${srcDir}/`) && !COPY_SKIP.test(f.path)).map((f) => f.path);
-      for (const f of files) {
-        const rel = srcDir === "." ? f : f.slice(srcDir.length + 1);
-        const live = isTextPath(f) ? await textOf(projectId, f) : null; // includes edits not saved to disk yet
-        const data = live ?? (await readFile(resolvePath(projectId, f)));
-        await writeBinary(projectId, `${folder}/${rel}`, Buffer.from(data));
-      }
-      for (const d of all.filter((f) => f.type === "dir" && srcDir !== "." && f.path.startsWith(`${srcDir}/`) && !COPY_SKIP.test(f.path))) {
-        await mkdir(resolvePath(projectId, `${folder}/${d.path.slice(srcDir.length + 1)}`), { recursive: true });
-      }
-      target = `${folder}/${path.posix.basename(src)}`;
-      if (input.title?.trim()) await updateDocument(projectId, target, { title: input.title });
-      return target;
-    }
-    target = `${folder}/main.tex`;
-    if (gallery && !input.content?.trim()) {
-      await copyTemplate(gallery.id, resolvePath(projectId, folder), title);
-      const engine = input.engine ?? gallery.engine;
-      if (engine && engine !== project.engine) await updateDocument(projectId, target, { engine });
-      if (input.title?.trim() && !documentTitleOf((await textOf(projectId, target)) ?? "")) await updateDocument(projectId, target, { title: input.title });
-      return target;
-    }
-    // A fresh, self-contained document folder.
-    const withSections = template === "article" || template === "ieee";
-    const withBib = template !== "blank";
-    if (withSections) await writeText(projectId, `${folder}/sections/introduction.tex`, "\\section{Introduction}\n\nStart writing here.\n");
-    if (withBib) await writeText(projectId, `${folder}/refs.bib`, "% References for this document. Add entries here, or insert them from the Library with \\cite{.\n");
-    await mkdir(resolvePath(projectId, `${folder}/figures`), { recursive: true });
-    const content = input.content?.trim() ? `${input.content.replace(/\s*$/, "")}\n`
-      : templateText(template, title, { bibs: withBib ? ["refs"] : [], macros: [], intro: withSections ? "sections/introduction" : undefined });
-    await writeText(projectId, target, content);
-  } else {
-    const baseDir = path.posix.dirname(project.mainFile);
-    target = input.path?.trim().replace(/^\/+/, "") || path.posix.join(baseDir, `${slug(title)}.tex`);
-    if (!target.endsWith(".tex")) target += ".tex";
-    target = path.posix.normalize(target);
+  // Where it goes: a fresh folder, or (for an explicit .tex path) the folder that path names.
+  const asked = path.posix.normalize(input.path?.trim().replace(/^\/+|\/+$/g, "") || ".");
+  const isFile = asked !== "." && (asked.endsWith(".tex") || asked.includes("/"));
+  let folder: string, target: string;
+  if (isFile && !input.copyFrom) {
+    const file = asked.endsWith(".tex") ? asked : `${asked}.tex`;
+    const dir = path.posix.dirname(file);
+    folder = dir === "." ? await unusedFolder(projectId, path.posix.basename(file, ".tex")) : dir;
+    target = `${folder}/${path.posix.basename(file)}`;
     resolvePath(projectId, target);
-    if ((await textOf(projectId, target)) !== null) {
-      if (input.path) throw new HttpError(409, `${target} already exists`);
-      const stem = target.replace(/\.tex$/, "");
-      let n = 2;
-      while ((await textOf(projectId, `${stem}-${n}.tex`)) !== null) n++;
-      target = `${stem}-${n}.tex`;
+    if ((await textOf(projectId, target)) !== null) throw new HttpError(409, `${target} already exists`);
+    if (await folderHasDocument(projectId, folder)) throw new HttpError(409, `${folder}/ already holds a document. Each document gets its own folder; pick a new one`);
+  } else {
+    folder = await unusedFolder(projectId, (asked === "." ? "" : asked.replace(/\.tex$/, "")) || slug(title));
+    resolvePath(projectId, folder);
+    target = `${folder}/main.tex`;
+  }
+
+  if (input.copyFrom) {
+    // A copy of another document: its whole folder, or (for a document at the top level) just the files it uses.
+    const src = (await resolveDocument(projectId, input.copyFrom)).path;
+    const srcDir = path.posix.dirname(src);
+    const all = await listFiles(projectId);
+    const files = srcDir === "."
+      ? await documentFiles(projectId, src, new Set(all.filter((f) => f.type === "file").map((f) => f.path)))
+      : all.filter((f) => f.type === "file" && f.path.startsWith(`${srcDir}/`) && !COPY_SKIP.test(f.path)).map((f) => f.path);
+    for (const f of files) {
+      if (srcDir === "." && f.startsWith(`${SHARED_DIR}/`)) continue; // shared files stay shared
+      const rel = srcDir === "." ? f : f.slice(srcDir.length + 1);
+      const live = isTextPath(f) ? await textOf(projectId, f) : null; // includes edits not saved to disk yet
+      const data = live ?? (await readFile(resolvePath(projectId, f)));
+      await writeBinary(projectId, `${folder}/${rel}`, Buffer.from(data));
     }
-    const dir = path.posix.dirname(target);
-    const content = input.content?.trim() ? `${input.content.replace(/\s*$/, "")}\n` : templateText(template, title, await resources(projectId, dir));
+    for (const d of all.filter((f) => f.type === "dir" && srcDir !== "." && f.path.startsWith(`${srcDir}/`) && !COPY_SKIP.test(f.path))) {
+      await mkdir(resolvePath(projectId, `${folder}/${d.path.slice(srcDir.length + 1)}`), { recursive: true });
+    }
+    target = `${folder}/${path.posix.basename(src)}`;
+    if (input.title?.trim()) await updateDocument(projectId, target, { title: input.title });
+    return target;
+  }
+
+  if (input.content?.trim()) {
+    const content = `${input.content.replace(/\s*$/, "")}\n`;
     if (!documentClassOf(content)) throw new HttpError(400, "A document needs a \\documentclass line");
     await writeText(projectId, target, content);
+  } else if (gallery) {
+    await copyTemplate(gallery.id, resolvePath(projectId, folder), title);
+    target = `${folder}/main.tex`; // gallery templates are built around main.tex
+    const engine = input.engine ?? gallery.engine;
+    if (engine && engine !== project.engine) await updateDocument(projectId, target, { engine });
+  } else {
+    // A fresh document folder. It uses the shared .bib if there is one, else gets its own.
+    const shared = await sharedResources(projectId);
+    const withSections = template === "article" || template === "ieee";
+    const ownBib = template !== "blank" && !shared.bibs.length;
+    if (withSections) await writeText(projectId, `${folder}/sections/introduction.tex`, "\\section{Introduction}\n\nStart writing here.\n");
+    if (ownBib) await writeText(projectId, `${folder}/refs.bib`, "% References for this document. Add entries here, or insert them from the Library with \\cite{.\n");
+    await mkdir(resolvePath(projectId, `${folder}/figures`), { recursive: true });
+    const bibs = template === "blank" ? [] : ownBib ? ["refs"] : shared.bibs;
+    await writeText(projectId, target, templateText(template, title, { bibs, macros: shared.macros, intro: withSections ? "sections/introduction" : undefined }));
   }
   if (input.engine && input.engine !== project.engine) await updateDocument(projectId, target, { engine: input.engine });
   // Letters and other classes without \title: remember the name the person or agent gave it.

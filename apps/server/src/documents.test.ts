@@ -27,17 +27,19 @@ test("several documents in one project", async () => {
   assert.deepEqual(list.map((d) => d.path), ["main.tex"]);
   assert.ok(list[0].isDefault);
 
+  // Every new document gets a folder of its own.
   const slides = await docs.createDocument(p.id, { title: "Conference talk", template: "beamer" });
-  assert.equal(slides, "conference-talk.tex");
+  assert.equal(slides, "conference-talk/main.tex");
   const again = await docs.createDocument(p.id, { title: "Conference talk", template: "beamer" });
-  assert.equal(again, "conference-talk-2.tex", "doesn't overwrite");
+  assert.equal(again, "conference-talk-2/main.tex", "doesn't overwrite");
   const text = await storage.readText(p.id, slides);
   assert.match(text.content, /\\documentclass\{beamer\}/);
-  assert.match(text.content, /\\bibliography\{refs\/references\}/, "reuses the project's .bib");
+  assert.match(text.content, /\\bibliography\{refs\}/, "its own .bib, as there's no shared one");
+  assert.ok((await storage.readText(p.id, "conference-talk/refs.bib")).content);
 
   list = await docs.listDocuments(p.id);
   assert.deepEqual(list.map((d) => [d.path, d.docClass, d.title]), [
-    ["main.tex", "article", "Multi"], ["conference-talk-2.tex", "beamer", "Conference talk"], ["conference-talk.tex", "beamer", "Conference talk"],
+    ["main.tex", "article", "Multi"], ["conference-talk-2/main.tex", "beamer", "Conference talk"], ["conference-talk/main.tex", "beamer", "Conference talk"],
   ]);
 
   await docs.updateDocument(p.id, slides, { engine: "xelatex" });
@@ -46,15 +48,58 @@ test("several documents in one project", async () => {
   await assert.rejects(docs.resolveDocument(p.id, "nope.tex"));
   await assert.rejects(docs.resolveDocument(p.id, "../x.tex"));
 
-  await docs.renameDocuments(p.id, (x) => (x === slides ? "talk.tex" : x));
-  assert.equal((await storage.getProject(p.id)).documents?.[0].path, "talk.tex");
-  await docs.renameDocuments(p.id, (x) => (x === "talk.tex" ? null : x));
+  await docs.renameDocuments(p.id, (x) => (x === slides ? "talk/main.tex" : x));
+  assert.equal((await storage.getProject(p.id)).documents?.[0].path, "talk/main.tex");
+  await docs.renameDocuments(p.id, (x) => (x === "talk/main.tex" ? null : x));
   assert.equal((await storage.getProject(p.id)).documents, undefined);
 
   await assert.rejects(docs.createDocument(p.id, { title: "x", content: "no class here" }));
   const made = await docs.createDocument(p.id, { title: "Rebuttal", path: "letters/rebuttal", content: "\\documentclass{letter}\n\\begin{document}\\end{document}" });
   assert.equal(made, "letters/rebuttal.tex");
   await assert.rejects(docs.createDocument(p.id, { title: "x", path: "letters/rebuttal.tex", content: "\\documentclass{article}" }), /already exists/);
+  // One document per folder.
+  await assert.rejects(docs.createDocument(p.id, { title: "x", path: "letters/reply.tex", content: "\\documentclass{letter}" }), /already holds a document/);
+});
+
+test("new documents use the shared folder, and documentFiles finds shared files", async () => {
+  const p = await storage.createProject("Shared", "blank", "Tester");
+  const dir = storage.projectDir(p.id);
+  const put = async (rel: string, text: string) => { await mkdir(path.dirname(path.join(dir, rel)), { recursive: true }); await writeFile(path.join(dir, rel), text); };
+  await put("shared/refs.bib", "@misc{a, title={A}}\n");
+  await put("shared/macros.tex", "\\newcommand\\x{x}\n");
+  await put("shared/figures/logo.pdf", "x");
+  const made = await docs.createDocument(p.id, { title: "Journal", template: "article" });
+  assert.equal(made, "journal/main.tex");
+  const main = (await storage.readText(p.id, made)).content;
+  assert.match(main, /\\bibliography\{refs\}/);
+  assert.match(main, /\\input\{macros\}/);
+  await assert.rejects(storage.readText(p.id, "journal/refs.bib"), /./, "no local copy of the shared .bib");
+
+  await put("journal/sections/intro.tex", "\\includegraphics{figures/logo}\n");
+  await put("journal/main.tex", main.replace("\\begin{document}", "\\begin{document}\n\\input{sections/intro}"));
+  const all = new Set((await storage.listFiles(p.id)).filter((f) => f.type === "file").map((f) => f.path));
+  const deps = await docs.documentFiles(p.id, made, all);
+  for (const f of ["shared/refs.bib", "shared/macros.tex", "shared/figures/logo.pdf"]) assert.ok(deps.includes(f), f);
+});
+
+test("share a file: it moves to shared/ and identical copies in other documents go", async () => {
+  const { planShare, shareFile } = await import("./shared.ts");
+  const p = await storage.createProject("Share", "blank", "Tester");
+  const dir = storage.projectDir(p.id);
+  const put = async (rel: string, text: string) => { await mkdir(path.dirname(path.join(dir, rel)), { recursive: true }); await writeFile(path.join(dir, rel), text); };
+  for (const d of ["a", "b", "c"]) await put(`${d}/main.tex`, "\\documentclass{article}\\begin{document}x\\end{document}\n");
+  await put("a/figures/model.pdf", "SAME");
+  await put("b/figures/model.pdf", "SAME");
+  await put("c/figures/model.pdf", "DIFFERENT");
+  const plan = await planShare(p.id, "a/figures/model.pdf");
+  assert.deepEqual(plan, { from: "a/figures/model.pdf", to: "shared/figures/model.pdf", duplicates: ["b/figures/model.pdf"] });
+  await shareFile(p.id, "a/figures/model.pdf", { name: "Tester" });
+  const files = (await storage.listFiles(p.id)).filter((f) => f.type === "file").map((f) => f.path);
+  assert.ok(files.includes("shared/figures/model.pdf"));
+  assert.ok(!files.includes("a/figures/model.pdf") && !files.includes("b/figures/model.pdf"));
+  assert.ok(files.includes("c/figures/model.pdf"), "a different copy stays");
+  await assert.rejects(planShare(p.id, "c/figures/model.pdf"), /already exists/);
+  await assert.rejects(planShare(p.id, "a/main.tex"), /main file/);
 });
 
 test("documentFiles follows inputs, figures, bib and local classes", async () => {
@@ -88,7 +133,7 @@ test("documents in their own folders, copies, new sections and archiving", async
   const p = await storage.createProject("Folders", "article", "Tester");
   const session = { name: "Tester" };
   // A fresh, self-contained document folder.
-  const journal = await docs.createDocument(p.id, { title: "Journal version", template: "article", layout: "folder" });
+  const journal = await docs.createDocument(p.id, { title: "Journal version", template: "article" });
   assert.equal(journal, "journal-version/main.tex");
   const main = (await storage.readText(p.id, journal)).content;
   assert.match(main, /\\input\{sections\/introduction\}/);

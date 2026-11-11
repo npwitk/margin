@@ -51,12 +51,12 @@ export function ShareDialog({ projectId, session, onClose }: { projectId: string
               ) : (
                 <div className="row gap">
                   <button className="btn primary" onClick={() => void invite("editor")}><Icon name="plus" size={13} />Invite a co-author</button>
-                  <button className="btn" onClick={() => void invite("advisor")} title="Advisors read, comment, follow Updates and use the board, but don't edit files"><Icon name="people" size={13} />Invite an advisor</button>
+                  <button className="btn" onClick={() => void invite("advisor")} title="Advisors can edit like co-authors and start on the Updates feed"><Icon name="people" size={13} />Invite an advisor</button>
                 </div>
               )}
               <span className="muted small">{link
-                ? `Anyone with this link can join as ${link.role === "advisor" ? "an advisor (read, comment, Updates, board)" : "an editor"} for 14 days.${link.admits ? " It also lets them sign in to Margin with GitHub, as a guest who sees only this paper; no separate Margin invite needed." : ""}`
-                : "Links expire after 14 days. Advisors (an instructor or supervisor) can read, comment, follow Updates and use the board, but not change files."}</span>
+                ? `Anyone with this link can join as ${link.role === "advisor" ? "an advisor (can edit; starts on Updates)" : "an editor"} for 14 days.${link.admits ? " It also lets them sign in to Margin with GitHub, as a guest who sees only this paper; no separate Margin invite needed." : ""}`
+                : "Links expire after 14 days. Advisors (an instructor or supervisor) can edit like co-authors and start on the Updates feed."}</span>
             </div>
           )}
           <div className="section-label tokens-label">Members</div>

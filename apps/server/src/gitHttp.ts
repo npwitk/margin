@@ -13,7 +13,7 @@ import { head, mergePushed } from "./pushMerge.ts";
 import { scheduleSummary } from "./updates.ts";
 import { projectDir } from "./storage.ts";
 import { verifyToken } from "./tokens.ts";
-import { canAccess, canEdit } from "./access.ts";
+import { canAccess } from "./access.ts";
 import { isActiveMember } from "./workspace.ts";
 
 /**
@@ -76,7 +76,6 @@ export async function handleGit(c: Context) {
   const service = rest === "/info/refs" ? c.req.query("service") : rest.slice(1);
   if (service !== "git-upload-pack" && service !== "git-receive-pack") return c.text("Dumb HTTP is not supported\n", 403);
   const isPush = service === "git-receive-pack" && c.req.method === "POST";
-  if (service === "git-receive-pack" && !(await canEdit(id, owner))) return c.text("Advisors can pull but not push. Ask an owner to make you an editor.\n", 403);
 
   await ensureConfig(dir);
   // Fetches see live edits. (Not before pushes: that would move the branch

@@ -58,8 +58,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [pdfVersions, setPdfVersions] = useState<Record<string, number>>({});
   const [newDocOpen, setNewDocOpen] = useState(false);
   // The section a new document goes in (from a section's "+" menu), and the "New section" trigger.
-  const [newDocArea, setNewDocArea] = useState<string | undefined>();
-  const [sectionSignal, setSectionSignal] = useState(0);
+  /** "Duplicate…" on a document card: the new-document dialog opens on a copy of it. */
+  const [newDocCopy, setNewDocCopy] = useState<string | undefined>();
   const [docMenuSignal, setDocMenuSignal] = useState(0);
   // Current values for async callbacks (compile queue, live events).
   const activeRef = useRef<string | null>(activeDoc);
@@ -91,7 +91,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const [currentHeading, setCurrentHeading] = useState(-1);
   const cursor = useRef<{ file: string | null; line: number | null }>({ file: null, line: null });
   const [view, setView] = useState<WorkspaceView>(() => load(`view:${projectId}`, "write"));
-  // Advisors read, comment and follow Updates; they don't type into files.
+  // Advisors edit like everyone else; Updates frames notes as feedback for them.
   const [advisor, setAdvisor] = useState(false);
   useEffect(() => { api.access(projectId).then((a) => setAdvisor(a.you?.role === "advisor")).catch(() => {}); }, [projectId]);
   const [previewTab, setPreviewTab] = useState<"pdf" | "assistant" | "citations">(() => load("previewTab", "pdf"));
@@ -468,41 +468,43 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
           break;
         }
         case "newDocument":
-          setNewDocArea(undefined);
+          setNewDocCopy(undefined);
           setNewDocOpen(true);
           break;
-        case "newDocIn":
-          setNewDocArea(path);
+        case "duplicateDoc":
+          setNewDocCopy(path);
           setNewDocOpen(true);
           break;
-        case "makeArea": {
-          const title = await ask({ title: "Make it a section", label: `${path}/ shows as its own group in the file list. Its files stay where they are.`, initial: path.split("/").pop()!.replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase()), confirm: "Make section" });
-          if (!title) return;
-          setProject((await api.createArea(projectId, title, path)).project);
+        case "share": {
+          await collab?.flush();
+          const plan = await api.share(projectId, path, true);
+          const ok = await ask({
+            title: `Move ${path.split("/").pop()} to Shared?`,
+            label: `It moves to ${plan.to}, and every document can use it by name.${plan.duplicates.length ? ` Identical copies are removed: ${plan.duplicates.join(", ")}.` : ""} A document's own file with the same name still wins.`,
+            confirm: "Move to Shared", confirmOnly: true,
+          });
+          if (ok === null) return;
+          const done = await api.share(projectId, path);
+          for (const f of [done.from, ...done.duplicates]) { collab?.closeUnder(f); editor.current?.forget(f); }
+          if (openPath && [done.from, ...done.duplicates].includes(openPath)) openFile(done.to);
+          await Promise.all([refreshFiles(), refreshDocs()]);
+          setRevealPath({ path: done.to, key: Date.now() });
+          notify(`Shared ${done.to}${done.duplicates.length ? `, removed ${done.duplicates.length} identical cop${done.duplicates.length === 1 ? "y" : "ies"}` : ""}`);
           break;
         }
-        case "renameArea": {
-          const current = project?.sections?.find((x) => x.path === path);
-          const title = await ask({ title: "Rename section", label: `The folder stays ${path}/.`, initial: current?.title, confirm: "Rename" });
-          if (!title) return;
-          setProject(await api.updateArea(projectId, path, { title }));
-          break;
-        }
-        case "unmakeArea":
-          setProject(await api.removeArea(projectId, path));
-          notify(`${path}/ is a plain folder again`);
-          break;
-        case "deleteArea": {
-          const n = files.filter((f) => f.type === "file" && f.path.startsWith(`${path}/`)).length;
-          const ok = await ask({ title: `Delete ${project?.sections?.find((x) => x.path === path)?.title ?? path}?`, label: `Deletes ${path}/ and its ${n} file${n === 1 ? "" : "s"}. They stay recoverable from History.`, confirm: "Delete", danger: true, confirmOnly: true });
+        case "deleteDoc": {
+          const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+          const target = dir || path;
+          const n = files.filter((f) => f.type === "file" && (f.path === target || f.path.startsWith(`${target}/`))).length;
+          const ok = await ask({ title: `Delete ${docs.find((d) => d.path === path)?.title ?? path}?`, label: dir ? `Deletes ${dir}/ and its ${n} file${n === 1 ? "" : "s"}. They stay recoverable from History.` : `Deletes ${path}. It stays recoverable from History.`, confirm: "Delete", danger: true, confirmOnly: true });
           if (ok === null) return;
           await collab?.flush();
-          await api.remove(projectId, path);
-          collab?.closeUnder(path);
-          files.filter((f) => f.path.startsWith(`${path}/`)).forEach((f) => editor.current?.forget(f.path));
-          setOpenPath((p) => (p?.startsWith(`${path}/`) ? null : p));
-          setTextPath((p) => (p?.startsWith(`${path}/`) ? null : p));
-          await Promise.all([refreshFiles(), refreshDocs(), api.project(projectId).then(setProject)]);
+          await api.remove(projectId, target);
+          collab?.closeUnder(target);
+          files.filter((f) => f.path === target || f.path.startsWith(`${target}/`)).forEach((f) => editor.current?.forget(f.path));
+          if (activeRef.current === path) selectDoc(project!.mainFile);
+          if (openPath === target || openPath?.startsWith(`${target}/`)) openFile(project!.mainFile);
+          await Promise.all([refreshFiles(), refreshDocs()]);
           break;
         }
         case "archiveDoc":
@@ -749,6 +751,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
   const currentDoc = activeDoc && (docs.length === 0 || docs.some((d) => d.path === activeDoc)) ? activeDoc : project.mainFile;
   const result = results[currentDoc] ?? null;
   const pdfVersion = pdfVersions[currentDoc] ?? 0;
+  /** The current document's folder: where new files and uploads go. */
+  const currentDir = currentDoc.includes("/") ? currentDoc.slice(0, currentDoc.lastIndexOf("/")) : "";
   const citeActions = { projectId, onOpenPdf: (c: CiteCard) => c.refId && setPaper({ refId: c.refId, title: c.title, label: c.authorYear ?? `[${c.label}]` }), onChanged: () => setCiteMapVersion((v) => v + 1) };
   const errors = result?.diagnostics.filter((d) => d.severity === "error").length ?? 0;
   const warnings = result?.diagnostics.filter((d) => d.severity === "warning").length ?? 0;
@@ -839,10 +843,10 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               </div>
               {sideTab === "files" && (
                 <div className="side-actions">
-                  <button className="icon-btn" title="New section: a named part of the project (Slides, Notes…) to put documents in" onClick={() => setSectionSignal(Date.now())}><Icon name="grid" size={15} /></button>
-                  <button className="icon-btn" title="New file" onClick={() => void onTreeAction("newFile", "")}><Icon name="plus" size={15} /></button>
-                  <button className="icon-btn" title="New folder" onClick={() => void onTreeAction("newFolder", "")}><Icon name="folderPlus" size={15} /></button>
-                  <button className="icon-btn" title="Upload files (or drop them anywhere in the list)" onClick={() => void onTreeAction("upload", "")}><Icon name="upload" size={15} /></button>
+                  <button className="icon-btn" title="New document, in a folder of its own" onClick={() => void onTreeAction("newDocument", "")}><Icon name="grid" size={15} /></button>
+                  <button className="icon-btn" title={`New file in ${currentDir || "the project"}/`} onClick={() => void onTreeAction("newFile", currentDir)}><Icon name="plus" size={15} /></button>
+                  <button className="icon-btn" title={`New folder in ${currentDir || "the project"}/`} onClick={() => void onTreeAction("newFolder", currentDir)}><Icon name="folderPlus" size={15} /></button>
+                  <button className="icon-btn" title={`Upload to ${currentDir || "the project"}/ (or drop files on a folder)`} onClick={() => void onTreeAction("upload", currentDir)}><Icon name="upload" size={15} /></button>
                 </div>
               )}
             </div>
@@ -865,18 +869,8 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
               onOpen={(p) => openFile(p)}
               onAction={(a, p) => void onTreeAction(a, p)}
               onDropFiles={(dir, list) => void uploadTo(dir, list)}
-              sections={project.sections}
-              startSection={sectionSignal}
-              onCreateSection={async (title) => {
-                try {
-                  const r = await api.createArea(projectId, title);
-                  setProject(r.project);
-                  await refreshFiles();
-                  setRevealPath({ path: r.section.path, key: Date.now() });
-                } catch (err) {
-                  notify((err as Error).message);
-                }
-              }}
+              onSelectDoc={selectDoc}
+              thumbKey={(d) => `${project.updatedAt}:${pdfVersions[d] ?? 0}`}
             />
             )}
           </aside>
@@ -929,7 +923,6 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
                     onCompile={compileShortcut}
                     onForwardSync={(p, l) => void forwardSync(p, l)}
                     onError={notify}
-                    readOnly={advisor}
                     onConflicts={(file, n) => { if (!n && collab?.conflicts.has(file)) collab.conflicts.delete(file); }}
                     citeOptions={citeOptions}
                     citeCards={citeCards}
@@ -949,7 +942,6 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
              </div>
               {reviewOpen && !binaryOpen && (
                 <ReviewPanel
-                  remote={advisor && textPath ? { projectId, path: textPath, onError: notify } : undefined}
                   doc={reviewDoc}
                   threads={threads}
                   session={session}
@@ -1031,7 +1023,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
         onOpenFile={(p) => { setHistoryOpen(false); openFile(p); }}
         onRestored={(msg) => { notify(msg); void refreshFiles(); void refreshDocs(); compile(); }} />}
       {aiSettingsOpen && <AiSettingsDialog settings={aiSettings} onChange={setAiSettings} onClose={() => setAiSettingsOpen(false)} />}
-      {newDocOpen && <NewDocumentDialog docs={docs} sections={project.sections} initialSection={newDocArea} defaultDir={(project.mainFile.includes("/") ? project.mainFile.slice(0, project.mainFile.lastIndexOf("/")) : ".")} onCreate={createDoc} onClose={() => setNewDocOpen(false)} />}
+      {newDocOpen && <NewDocumentDialog docs={docs} initialCopyFrom={newDocCopy} onCreate={createDoc} onClose={() => setNewDocOpen(false)} />}
       {shareOpen && <ShareDialog projectId={projectId} session={session} onClose={() => setShareOpen(false)} />}
       {localOpen && <LocalDialog projectId={projectId} session={session} onClose={() => setLocalOpen(false)} />}
       {prompt && <PromptDialog req={prompt} onDone={() => setPrompt(null)} />}

@@ -82,10 +82,15 @@ function pdfTex(pdfName: string, widthBp: number, heightBp: number) {
 
 export interface SvgResult { converted: number; failed: string[] }
 
-/** Convert the SVGs under `cwd` (the document's folder) for \includesvg. Cheap when nothing changed. */
-export async function prepareSvgs(cwd: string): Promise<SvgResult> {
+/**
+ * Convert the SVGs under `cwd` (the document's folder) and `also` (the shared
+ * folder) for \includesvg, into cwd/svg-inkscape. Cheap when nothing changed.
+ */
+export async function prepareSvgs(cwd: string, also: string[] = []): Promise<SvgResult> {
   const result: SvgResult = { converted: 0, failed: [] };
   const svgs = await findSvgs(cwd);
+  // Skip a shared folder the document's own scan already covers (a document at the project root).
+  for (const dir of also) if (path.relative(cwd, dir).startsWith("..")) await findSvgs(dir, svgs);
   if (!svgs.length) return result;
   const outDir = path.join(cwd, "svg-inkscape");
   await mkdir(outDir, { recursive: true });

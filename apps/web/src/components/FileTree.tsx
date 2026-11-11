@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
-import { documentLabels, isTextPath, type DocumentInfo, type FileEntry, type ProjectSection } from "@margin/shared";
+import { SHARED_DIR, documentLabels, isTextPath, type DocumentInfo, type FileEntry } from "@margin/shared";
 import { Icon } from "./Icon.tsx";
 import { load, save } from "../lib/storage.ts";
 import { readDrop, type Dropped } from "../lib/dropped.ts";
 import type { Peer } from "../lib/collab.ts";
 import { Avatar } from "./Presence.tsx";
+import { api } from "../lib/api.ts";
+import { pageThumbnail } from "../lib/thumbnails.ts";
 
 export type TreeAction = "newFile" | "newFolder" | "upload" | "rename" | "delete" | "setMain" | "compileDoc" | "download" | "renameDoc" | "resetDocName" | "newSection" | "newDocument" | "archiveDoc" | "restoreDoc"
-  | "newDocIn" | "renameArea" | "unmakeArea" | "deleteArea" | "makeArea";
+  | "share" | "duplicateDoc" | "deleteDoc";
 
 interface Node { name: string; path: string; type: "file" | "dir"; children: Node[] }
 
@@ -28,11 +30,10 @@ interface Props {
   reveal?: { path: string; key: number };
   /** Drag a file or folder in the tree onto a folder ("" = project root). */
   onMove(from: string, toDir: string): void;
-  /** The project's sections (named folders such as Slides or Notes), shown as groups. */
-  sections?: ProjectSection[];
-  /** Changes when someone clicks "New section": show the inline name field. */
-  startSection?: number;
-  onCreateSection?(title: string): Promise<void>;
+  /** Switch the current document (its card was clicked). */
+  onSelectDoc(path: string): void;
+  /** Changes whenever a document's PDF may have changed, so its thumbnail is redrawn. */
+  thumbKey(doc: string): string;
 }
 
 /** Drag data type for moving entries inside the tree (distinct from files dragged in from the desktop). */
@@ -74,17 +75,6 @@ function buildTree(files: FileEntry[], root?: string): Node[] {
 
 const dirOfPath = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 
-/**
- * A document's own folder: the folder its main file is in, when no other
- * document lives in that folder or below it. Everything inside belongs to it.
- */
-function ownedRoot(doc: DocumentInfo, all: DocumentInfo[]): string | undefined {
-  const dir = dirOfPath(doc.path);
-  if (!dir) return undefined;
-  const others = all.filter((d) => d.path !== doc.path).map((d) => dirOfPath(d.path));
-  return others.some((o) => o === dir || o.startsWith(`${dir}/`)) ? undefined : dir;
-}
-
 function fileIcon(path: string) {
   if (/\.(png|jpe?g|gif|svg|webp)$/i.test(path)) return "image";
   if (/\.pdf$/i.test(path)) return "pdf";
@@ -92,98 +82,86 @@ function fileIcon(path: string) {
   return "file";
 }
 
-type TreeMode = "auto" | "sections" | "documents" | "folders";
-
-interface Group { id: string; title: string; tag?: string; subtitle?: string; doc?: DocumentInfo; area?: ProjectSection; files: FileEntry[]; archived?: boolean; root?: string }
-
-/**
- * With sections (named folders: Paper, Slides, Notes…), the tree shows one
- * group per section with its folder's contents, then everything else.
- */
-function groupBySection(files: FileEntry[], sections: ProjectSection[]): Group[] {
-  const groups: Group[] = sections.map((s) => ({ id: `area:${s.path}`, title: s.title, subtitle: `${s.path}/`, area: s, files: [], root: s.path }));
-  // The deepest section a path is in (sections can sit inside other sections' folders).
-  const home = (p: string) => groups.filter((g) => p.startsWith(`${g.root}/`)).sort((a, b) => b.root!.length - a.root!.length)[0];
-  const rest: Group = { id: "rest", title: "Not in a section", subtitle: "Files outside every section. Right-click a folder to make it a section.", files: [] };
-  for (const f of files) {
-    if (groups.some((g) => g.root === f.path)) continue;
-    (home(f.path) ?? rest).files.push(f);
-  }
-  return [...groups, ...(rest.files.length ? [rest] : [])];
-}
+const inside = (p: string, dir: string) => !dir || p === dir || p.startsWith(`${dir}/`);
+const isShared = (p: string) => inside(p, SHARED_DIR);
 
 /**
- * With several documents, the tree shows one section per document (the files
- * it uses), then files shared by several documents, then everything else.
+ * Split the project for the panel: the current document's folder, the shared
+ * folder, and everything else (notes, archived documents, stray files).
+ * Other documents' folders aren't listed: their cards open them.
  */
-function groupByDocument(files: FileEntry[], allDocs: DocumentInfo[]): Group[] {
-  const docs = allDocs.filter((d) => !d.archived);
-  const archivedDocs = allDocs.filter((d) => d.archived);
-  const users = new Map<string, string[]>();
-  for (const d of docs) for (const f of d.files ?? [d.path]) users.set(f, [...(users.get(f) ?? []), d.path]);
-  // Files only archived documents use go with those documents, out of the way.
-  const archivedUsers = new Map<string, string>();
-  for (const d of archivedDocs) for (const f of d.files ?? [d.path]) if (!users.has(f) && !archivedUsers.has(f)) archivedUsers.set(f, d.path);
-  const labels = documentLabels(allDocs);
-  // Same title twice: keep the folder/file tag separate so long titles don't truncate it away.
-  const groups: Group[] = docs.map((d) => {
-    const label = labels.get(d.path) ?? d.title;
-    return { id: `doc:${d.path}`, title: d.title, tag: label !== d.title ? label.slice(d.title.length + 3) : undefined, subtitle: d.path, doc: d, files: [], root: ownedRoot(d, allDocs) };
-  });
-  const archived: Group[] = archivedDocs.map((d) => ({ id: `archived:${d.path}`, title: labels.get(d.path) ?? d.title, subtitle: d.path, doc: d, files: [], archived: true, root: ownedRoot(d, allDocs) }));
-  // The group whose own folder contains a path (the deepest one), for files no document uses yet.
-  const owner = (p: string) => [...groups, ...archived].filter((g) => g.root && p.startsWith(`${g.root}/`)).sort((a, b) => b.root!.length - a.root!.length)[0];
-  const shared: Group = { id: "shared", title: "Shared", subtitle: "Used by more than one document", files: [] };
-  const other: Group = { id: "other", title: "Other files", subtitle: "Not used by any document yet: notes, data, unused figures", files: [] };
-  const filePaths = files.filter((f) => f.type === "file").map((f) => f.path);
+function partition(files: FileEntry[], docs: DocumentInfo[], current: string) {
+  const curDir = dirOfPath(current);
+  const activeDirs = docs.filter((d) => !d.archived && d.path !== current).map((d) => dirOfPath(d.path)).filter(Boolean);
+  // Folders of documents deeper than the current one's (all of them when it sits at the top level) aren't its files.
+  const nested = docs.filter((d) => d.path !== current).map((d) => dirOfPath(d.path)).filter((d) => d && d !== curDir && inside(d, curDir));
+  const mine: FileEntry[] = [], shared: FileEntry[] = [], other: FileEntry[] = [];
   for (const f of files) {
-    if (f.type === "dir") {
-      // Empty folders: inside a document's own folder they belong to it; otherwise they go with the other files.
-      if (filePaths.some((p) => p.startsWith(`${f.path}/`))) continue;
-      (owner(f.path) ?? other).files.push(f);
-      continue;
-    }
-    const u = users.get(f.path) ?? [];
-    if (u.length === 1) groups.find((g) => g.doc?.path === u[0])!.files.push(f);
-    else if (u.length > 1) shared.files.push(f);
-    else if (archivedUsers.has(f.path)) archived.find((g) => g.doc?.path === archivedUsers.get(f.path))!.files.push(f);
-    else (owner(f.path) ?? other).files.push(f);
+    if (f.path === SHARED_DIR || (curDir && f.path === curDir)) continue;
+    if (isShared(f.path)) shared.push(f);
+    else if (inside(f.path, curDir) && !nested.some((d) => inside(f.path, d))) mine.push(f);
+    else if (!activeDirs.some((d) => inside(f.path, d))) other.push(f);
   }
-  return [...groups, shared, other, ...archived].filter((g) => g.files.length || g.archived);
+  return { curDir, mine, shared, other };
 }
 
-export function FileTree({ projectId, files, openPath, mainFile, documents = [], activeDoc, dirty, peersByFile, onOpen, onAction, onDropFiles, onMove, reveal, sections = [], startSection, onCreateSection }: Props) {
+/** A document as a card: page 1 of its PDF, its name and folder. */
+function DocCard({ projectId, doc, active, label, thumbKey, compact, onClick, onMenu }: {
+  projectId: string; doc: DocumentInfo; active: boolean; label?: string; thumbKey: string; compact: boolean;
+  onClick(): void; onMenu(e: MouseEvent): void;
+}) {
+  const [thumb, setThumb] = useState<string | null>(null);
+  useEffect(() => {
+    if (compact || !doc.hasPdf) { setThumb(null); return; }
+    let cancelled = false;
+    const prefix = `${projectId}:${doc.path}:`;
+    void pageThumbnail(api.pdfUrl(projectId, Date.now(), doc.path), `${prefix}${thumbKey}`, prefix).then((url) => { if (!cancelled) setThumb(url); });
+    return () => { cancelled = true; };
+  }, [projectId, doc.path, doc.hasPdf, thumbKey, compact]);
+  const slide = doc.docClass === "beamer";
+  return (
+    <button className={`doc-card ${active ? "active" : ""} ${compact ? "compact" : ""}`} onClick={onClick} onContextMenu={onMenu}
+      title={`${doc.path}${active ? " · the document you're working on" : " · click to open"} · right-click for more`}>
+      {!compact && (
+        <span className={`doc-card-thumb ${slide ? "landscape" : ""}`}>
+          {thumb ? <img src={thumb} alt="" /> : <span className="doc-card-class">{doc.docClass ?? "tex"}</span>}
+        </span>
+      )}
+      <span className="doc-card-text">
+        <span className="doc-card-title ellipsis">{doc.title}</span>
+        <span className="doc-card-path ellipsis">{label ?? (dirOfPath(doc.path) ? `${dirOfPath(doc.path)}/` : doc.path)}{doc.hasPdf ? "" : " · not compiled"}</span>
+      </span>
+      {active && <span className="tree-group-live" />}
+    </button>
+  );
+}
+
+export function FileTree({ projectId, files, openPath, mainFile, documents = [], activeDoc, dirty, peersByFile, onOpen, onAction, onDropFiles, onMove, reveal, onSelectDoc, thumbKey }: Props) {
   const docPaths = useMemo(() => documents.map((d) => d.path), [documents]);
-  const [mode, setMode] = useState<TreeMode>(() => load(`treeMode:${projectId}`, "auto"));
-  // "auto": sections when the project has any, otherwise one group per document when there are several.
-  const view: "sections" | "documents" | "folders" = mode === "sections" && sections.length ? "sections"
-    : mode === "documents" && documents.length > 1 ? "documents"
-      : mode === "auto" ? (sections.length ? "sections" : documents.length > 1 ? "documents" : "folders") : "folders";
-  const grouped = view !== "folders";
-  const tree = useMemo(() => buildTree(files), [files]);
-  const groups = useMemo(() => (view === "sections" ? groupBySection(files, sections)
-    : view === "documents" ? groupByDocument(files, documents) : []).map((g) => ({ ...g, tree: buildTree(g.files, g.root) })), [view, files, documents, sections]);
-  const [naming, setNaming] = useState(false);
-  const [newName, setNewName] = useState("");
-  useEffect(() => { if (startSection) { setNaming(true); setNewName(""); } }, [startSection]);
-  const submitSection = async () => {
-    const title = newName.trim();
-    setNaming(false);
-    if (!title || !onCreateSection) return;
-    if (mode === "folders" || mode === "documents") setTreeMode("auto");
-    await onCreateSection(title);
-  };
-  // Which documents use each file (for the Shared group's labels and hover text).
+  const current = activeDoc ?? mainFile;
+  const active = documents.filter((d) => !d.archived);
+  const archived = documents.filter((d) => d.archived);
+  const labels = useMemo(() => documentLabels(documents), [documents]);
+  const [allFiles, setAllFilesState] = useState(() => load(`allFiles:${projectId}`, false));
+  const setAllFiles = (v: boolean) => { setAllFilesState(v); save(`allFiles:${projectId}`, v); };
+  const parts = useMemo(() => partition(files, documents, current), [files, documents, current]);
+  const trees = useMemo(() => ({
+    all: buildTree(files),
+    mine: buildTree(parts.mine, parts.curDir || undefined),
+    shared: buildTree(parts.shared, SHARED_DIR),
+    other: buildTree(parts.other),
+  }), [files, parts]);
+  // Which documents use each file (the Shared folder's "used by" labels and hover text).
   const usedBy = useMemo(() => {
     const m = new Map<string, DocumentInfo[]>();
     for (const d of documents) for (const f of d.files ?? [d.path]) m.set(f, [...(m.get(f) ?? []), d]);
     return m;
   }, [documents]);
-  const shortName = (d: DocumentInfo) => d.path.split("/").pop()!.replace(/\.tex$/, "");
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(load<string[]>(`collapsed:${projectId}`, [])));
+  const shortName = (d: DocumentInfo) => (dirOfPath(d.path).split("/").pop() || d.path.replace(/\.tex$/, ""));
+  // Folders start open; "Other files" starts closed.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(load<string[]>(`tree:${projectId}`, ["group:other"])));
   const [menu, setMenu] = useState<{ x: number; y: number; node: Node | null } | null>(null);
-  const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; doc: DocumentInfo; dir: string } | null>(null);
-  const [areaMenu, setAreaMenu] = useState<{ x: number; y: number; area: ProjectSection; full: boolean } | null>(null);
+  const [docMenu, setDocMenu] = useState<{ x: number; y: number; doc: DocumentInfo } | null>(null);
   const [showArchived, setShowArchivedState] = useState(() => load(`showArchived:${projectId}`, false));
   const setShowArchived = (v: boolean) => { setShowArchivedState(v); save(`showArchived:${projectId}`, v); };
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -193,21 +171,20 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
     const next = new Set(collapsed);
     next.has(key) ? next.delete(key) : next.add(key);
     setCollapsed(next);
-    save(`collapsed:${projectId}`, [...next]);
+    save(`tree:${projectId}`, [...next]);
   };
-  // Reveal a path: open every group and folder on the way, then scroll to it and flash it.
+  // Reveal a path: open what it's in (switching to its document when it's in another one's folder), then scroll to it and flash it.
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!reveal) return;
     const target = reveal.path;
+    const owner = active.filter((d) => d.path !== current && dirOfPath(d.path) && inside(target, dirOfPath(d.path))).sort((a, b) => b.path.length - a.path.length)[0];
+    if (owner && !allFiles) onSelectDoc(owner.path);
     const ancestors = target.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
     const next = new Set(collapsed);
-    const scopes = grouped ? groups.filter((g) => g.files.some((f) => f.path === target || f.path.startsWith(`${target}/`))).map((g) => g.id) : [""];
-    for (const scope of scopes) {
-      const g = groups.find((x) => x.id === scope);
-      if (g) { next.delete(`group:${g.id}`); if (g.archived) { next.add(`open:group:${g.id}`); setShowArchived(true); } }
-      for (const a of ancestors) next.delete(scope ? `${scope}|${a}` : a);
-    }
+    for (const scope of ["", "mine", "shared", "other"]) for (const a of ancestors) next.delete(scope ? `${scope}|${a}` : a);
+    if (isShared(target)) next.delete("group:shared");
+    else if (!owner && !inside(target, parts.curDir)) next.delete("group:other");
     setCollapsed(next);
     const t = window.setTimeout(() => {
       const el = rootRef.current?.querySelector<HTMLElement>(`[data-path="${CSS.escape(target)}"]`);
@@ -217,8 +194,6 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
     }, 60);
     return () => window.clearTimeout(t);
   }, [reveal]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const setTreeMode = (m: TreeMode) => { setMode(m); save(`treeMode:${projectId}`, m); };
 
   const openMenu = (e: MouseEvent, node: Node | null) => {
     e.preventDefault();
@@ -318,121 +293,96 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
           <span className={`tree-name ${isTextPath(n.path) ? "" : "muted"}`}>{n.name}</span>
           {n.path === mainFile ? <span className={`badge ${activeDoc === n.path ? "" : "dim"}`} title="Default document">main</span>
             : docPaths.includes(n.path) && <span className={`badge ${activeDoc === n.path ? "" : "dim"}`} title={activeDoc === n.path ? "The document you're compiling" : "A document: right-click to compile it"}>doc</span>}
-          {scope === "shared" && usedBy.get(n.path)?.map((d) => <span key={d.path} className="used-by" title={`Used by ${d.path}`}>{shortName(d)}</span>)}
+          {scope === "shared" && (usedBy.get(n.path)?.length ?? 0) > 0 && <span className="used-by" title={`Used by ${usedBy.get(n.path)!.map((d) => d.path).join(", ")}`}>{usedBy.get(n.path)!.length > 1 ? `${usedBy.get(n.path)!.length} docs` : shortName(usedBy.get(n.path)![0])}</span>}
           {peersByFile.get(n.path)?.slice(0, 3).map((p) => <Avatar key={p.clientId} name={p.user.name} agent={p.user.agent} size="xs" title={p.user.agent ? p.user.name : `${p.user.name} is editing`} />)}
           {dirty.has(n.path) && <span className="dot" title="Sending edits…" />}
         </button>
       );
     });
 
-  const menuDir = menu?.node ? (menu.node.type === "dir" ? menu.node.path : "") : "";
+  const menuDir = menu?.node ? (menu.node.type === "dir" ? menu.node.path : "") : parts.curDir;
   const act = (a: TreeAction, path: string) => { setMenu(null); onAction(a, path); };
+  const doc = (a: TreeAction, path: string) => { setDocMenu(null); onAction(a, path); };
 
+  /** A titled block of the panel (the current document's folder, Shared, Other files). */
+  const group = (id: string, title: string, dir: string, nodes: Node[], opts: { hint?: string; empty?: string; actions?: boolean } = {}) => {
+    const open = !collapsed.has(`group:${id}`);
+    const count = (id === "mine" ? parts.mine : id === "shared" ? parts.shared : parts.other).filter((f) => f.type === "file").length;
+    return (
+      <section className={`tree-group ${dropTarget === `group:${id}` ? "drop-target" : ""}`} {...groupDropProps(`group:${id}`, dir)}>
+        <div className="tree-group-row">
+          <button className="tree-group-head" onClick={() => toggle(`group:${id}`)} title={opts.hint}>
+            <Icon name="chevron" size={11} className={`chev ${open ? "open" : ""}`} />
+            <span className="tree-group-title ellipsis">{title}</span>
+            <span className="tree-group-count">{count}</span>
+          </button>
+          {opts.actions && (
+            <>
+              <button className="icon-btn tree-group-add" title={`New file in ${dir || "the project"}/`} onClick={() => onAction("newFile", dir)}><Icon name="plus" size={13} /></button>
+              <button className="icon-btn tree-group-add" title={`Upload to ${dir || "the project"}/ (or drop files here)`} onClick={() => onAction("upload", dir)}><Icon name="upload" size={13} /></button>
+            </>
+          )}
+        </div>
+        {open && (nodes.length ? renderNodes(nodes, 0, id) : opts.empty && <div className="tree-empty-area">{opts.empty}</div>)}
+      </section>
+    );
+  };
+
+  const curInfo = documents.find((d) => d.path === current);
   return (
-    <div ref={rootRef} className={`tree ${dropTarget === "" ? "drop-target" : ""}`} onContextMenu={(e) => openMenu(e, null)} {...dropProps("")}>
-      {(documents.length > 1 || sections.length > 0) && (
-        <div className="tree-mode segmented">
-          {sections.length > 0 && <button className={view === "sections" ? "active" : ""} onClick={() => setTreeMode("sections")} title="Group files by project section">Sections</button>}
-          {documents.length > 1 && <button className={view === "documents" ? "active" : ""} onClick={() => setTreeMode("documents")} title="Group files by the document that uses them">By document</button>}
-          <button className={view === "folders" ? "active" : ""} onClick={() => setTreeMode("folders")} title="Plain folder view">Folders</button>
+    <div ref={rootRef} className={`tree ${dropTarget === "" ? "drop-target" : ""}`} onContextMenu={(e) => openMenu(e, null)} {...dropProps(allFiles ? "" : parts.curDir)}>
+      <div className="doc-cards">
+        {active.map((d) => (
+          <DocCard key={d.path} projectId={projectId} doc={d} active={d.path === current} label={labels.get(d.path) !== d.title ? labels.get(d.path)?.slice(d.title.length + 3) : undefined}
+            thumbKey={thumbKey(d.path)} compact={active.length < 2}
+            onClick={() => { onSelectDoc(d.path); onOpen(d.path); }}
+            onMenu={(e) => { e.preventDefault(); e.stopPropagation(); setDocMenu({ x: e.clientX, y: e.clientY, doc: d }); }} />
+        ))}
+        <div className="doc-cards-foot">
+          <button className="tree-archived-toggle" onClick={() => onAction("newDocument", "")} title="New document, in a folder of its own"><Icon name="plus" size={11} />New</button>
+          {archived.length > 0 && (
+            <button className="tree-archived-toggle" onClick={() => setShowArchived(!showArchived)}>
+              <Icon name="chevron" size={11} className={`chev ${showArchived ? "open" : ""}`} />Archived · {archived.length}
+            </button>
+          )}
+          <span className="spacer" />
+          <button className={`tree-archived-toggle ${allFiles ? "on" : ""}`} onClick={() => setAllFiles(!allFiles)} title="Show every file in one folder tree, to move things around">
+            <Icon name="folder" size={11} />All files
+          </button>
         </div>
-      )}
-      {naming && (
-        <div className="tree-new-area">
-          <Icon name="folder" size={14} className="tree-icon folder" />
-          <input className="input" autoFocus placeholder="Section name, e.g. Slides" value={newName} onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void submitSection(); if (e.key === "Escape") setNaming(false); }}
-            onBlur={() => void submitSection()} />
-        </div>
-      )}
-      {grouped
-        ? groups.map((g, i) => {
-            const key = `group:${g.id}`;
-            // Archived groups start closed; the rest start open.
-            const open = g.archived ? collapsed.has(`open:${key}`) : !collapsed.has(key);
-            const firstArchived = g.archived && !groups[i - 1]?.archived;
-            if (g.archived && !showArchived) {
-              return firstArchived
-                ? <button key="archived-toggle" className="tree-archived-toggle" onClick={() => setShowArchived(true)}><Icon name="chevron" size={11} className="chev" />Archived · {groups.filter((x) => x.archived).length}</button>
-                : null;
-            }
-            return (
-              <div key={g.id}>
-                {firstArchived && <button className="tree-archived-toggle" onClick={() => setShowArchived(false)}><Icon name="chevron" size={11} className="chev open" />Archived · {groups.filter((x) => x.archived).length}</button>}
-                <section className={`tree-group ${g.doc && g.doc.path === activeDoc ? "active" : ""} ${g.archived ? "archived" : ""} ${(g.doc || g.area) && dropTarget === `group:${g.id}` ? "drop-target" : ""}`}
-                  {...(g.area ? groupDropProps(`group:${g.id}`, g.area.path) : g.doc ? groupDropProps(`group:${g.id}`, g.root ?? dirOfPath(g.doc.path)) : {})}>
-                  <div className="tree-group-row">
-                    <button className="tree-group-head" onClick={() => toggle(g.archived ? `open:${key}` : key)}
-                      title={g.area ? `${g.subtitle} · right-click for more` : g.doc ? `${g.subtitle}${g.archived ? " · archived: right-click to restore" : " · double-click to compile · right-click for more"}` : g.subtitle}
-                      onDoubleClick={() => g.doc && !g.archived && onAction("compileDoc", g.doc.path)}
-                      onContextMenu={(e) => {
-                        if (g.area) { e.preventDefault(); e.stopPropagation(); setAreaMenu({ x: e.clientX, y: e.clientY, area: g.area, full: true }); return; }
-                        if (!g.doc) return;
-                        e.preventDefault(); e.stopPropagation(); setGroupMenu({ x: e.clientX, y: e.clientY, doc: g.doc, dir: g.root ?? dirOfPath(g.doc.path) });
-                      }}>
-                      <Icon name="chevron" size={11} className={`chev ${open ? "open" : ""}`} />
-                      {g.archived && <Icon name="archive" size={11} className="muted" />}
-                      <span className="tree-group-title ellipsis">{g.title}</span>
-                      {g.tag && <span className="tree-group-tag" title={g.subtitle}>{g.tag}</span>}
-                      {g.doc && g.doc.path === activeDoc && <span className="tree-group-live" title="The document you're compiling" />}
-                      <span className="tree-group-count">{g.files.filter((f) => f.type === "file").length}</span>
-                    </button>
-                    {g.area && (
-                      <button className="icon-btn tree-group-add" title={`Add to ${g.title}`}
-                        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setAreaMenu({ x: r.left, y: r.bottom + 4, area: g.area!, full: false }); }}>
-                        <Icon name="plus" size={13} />
-                      </button>
-                    )}
-                  </div>
-                  {open && (g.area && !g.tree.length
-                    ? <button className="tree-empty-area" style={{ paddingLeft: 24 }} onClick={() => onAction("newDocIn", g.area!.path)}>Empty. Add a document…</button>
-                    : renderNodes(g.tree, 0, g.id))}
-                </section>
-              </div>
-            );
-          })
-        : renderNodes(tree, 0, "")}
-      {groupMenu && (
+        {showArchived && archived.map((d) => (
+          <button key={d.path} className="doc-archived-row" onClick={() => onAction("restoreDoc", d.path)} title={`${d.path} · click to restore`}>
+            <Icon name="archive" size={11} /><span className="ellipsis">{d.title}</span><span className="muted small">Restore</span>
+          </button>
+        ))}
+      </div>
+      {allFiles
+        ? renderNodes(trees.all, 0, "")
+        : (
+          <>
+            {group("mine", parts.curDir ? `${parts.curDir}/` : (curInfo?.title ?? "Project"), parts.curDir, trees.mine,
+              { hint: "The files of the document you're working on", actions: true })}
+            {group("shared", "Shared", SHARED_DIR, trees.shared, {
+              hint: `${SHARED_DIR}/: every document uses these by name (\\includegraphics{x}, \\bibliography{refs}). A document's own file of the same name wins.`,
+              empty: "Figures, .bib and macros every document can use. Drop files here, or right-click a file → Move to Shared.", actions: true,
+            })}
+            {parts.other.length > 0 && group("other", "Other files", "", trees.other, { hint: "Notes, archived documents and files outside every document's folder" })}
+          </>
+        )}
+      {docMenu && (
         <>
-          <div className="menu-backdrop" onClick={() => setGroupMenu(null)} onContextMenu={(e) => { e.preventDefault(); setGroupMenu(null); }} />
-          <div className="menu" style={{ left: groupMenu.x, top: Math.min(groupMenu.y, window.innerHeight - 200) }}>
-            {groupMenu.doc.archived ? (
-              <>
-                <button onClick={() => { setGroupMenu(null); onAction("restoreDoc", groupMenu.doc.path); }}><Icon name="history" size={14} />Restore document</button>
-                <button onClick={() => { setGroupMenu(null); onAction("renameDoc", groupMenu.doc.path); }}><Icon name="file" size={14} />Rename group…</button>
-              </>
-            ) : (
-              <>
-                <button onClick={() => { setGroupMenu(null); onAction("newSection", groupMenu.doc.path); }}><Icon name="plus" size={14} />Add a chapter file (\input)…</button>
-                <button onClick={() => { setGroupMenu(null); onAction("newFile", groupMenu.dir); }}><Icon name="file" size={14} />New file here…</button>
-                <button onClick={() => { setGroupMenu(null); onAction("newFolder", groupMenu.dir); }}><Icon name="folderPlus" size={14} />New folder here…</button>
-                <button onClick={() => { setGroupMenu(null); onAction("upload", groupMenu.dir); }}><Icon name="upload" size={14} />Upload here…</button>
-                {groupMenu.doc.path !== activeDoc && <button onClick={() => { setGroupMenu(null); onAction("compileDoc", groupMenu.doc.path); }}><Icon name="play" size={14} />Compile this document</button>}
-                <div className="menu-sep" />
-                <button onClick={() => { setGroupMenu(null); onAction("renameDoc", groupMenu.doc.path); }}><Icon name="file" size={14} />Rename group…</button>
-                {groupMenu.doc.customTitle && <button onClick={() => { setGroupMenu(null); onAction("resetDocName", groupMenu.doc.path); }}><Icon name="history" size={14} />Use the LaTeX \title again</button>}
-                {!groupMenu.doc.isDefault && <button onClick={() => { setGroupMenu(null); onAction("setMain", groupMenu.doc.path); }}><Icon name="star" size={14} />Make default document</button>}
-                <button onClick={() => { setGroupMenu(null); onAction("newDocument", groupMenu.doc.path); }}><Icon name="folderPlus" size={14} />New document…</button>
-                {!groupMenu.doc.isDefault && <><div className="menu-sep" /><button onClick={() => { setGroupMenu(null); onAction("archiveDoc", groupMenu.doc.path); }}><Icon name="archive" size={14} />Archive document</button></>}
-              </>
-            )}
-          </div>
-        </>
-      )}
-      {areaMenu && (
-        <>
-          <div className="menu-backdrop" onClick={() => setAreaMenu(null)} onContextMenu={(e) => { e.preventDefault(); setAreaMenu(null); }} />
-          <div className="menu" style={{ left: areaMenu.x, top: Math.min(areaMenu.y, window.innerHeight - 260) }}>
-            <button onClick={() => { setAreaMenu(null); onAction("newDocIn", areaMenu.area.path); }}><Icon name="plus" size={14} />New LaTeX document…</button>
-            <button onClick={() => { setAreaMenu(null); onAction("newFile", areaMenu.area.path); }}><Icon name="file" size={14} />New file…</button>
-            <button onClick={() => { setAreaMenu(null); onAction("newFolder", areaMenu.area.path); }}><Icon name="folderPlus" size={14} />New folder…</button>
-            <button onClick={() => { setAreaMenu(null); onAction("upload", areaMenu.area.path); }}><Icon name="upload" size={14} />Upload…</button>
-            {areaMenu.full && (
+          <div className="menu-backdrop" onClick={() => setDocMenu(null)} onContextMenu={(e) => { e.preventDefault(); setDocMenu(null); }} />
+          <div className="menu" style={{ left: docMenu.x, top: Math.min(docMenu.y, window.innerHeight - 240) }}>
+            <button onClick={() => doc("newSection", docMenu.doc.path)}><Icon name="plus" size={14} />Add a chapter file (\input)…</button>
+            <button onClick={() => doc("renameDoc", docMenu.doc.path)}><Icon name="file" size={14} />Rename…</button>
+            {docMenu.doc.customTitle && <button onClick={() => doc("resetDocName", docMenu.doc.path)}><Icon name="history" size={14} />Use the LaTeX \title again</button>}
+            <button onClick={() => doc("duplicateDoc", docMenu.doc.path)}><Icon name="folderPlus" size={14} />Duplicate…</button>
+            {!docMenu.doc.isDefault && <button onClick={() => doc("setMain", docMenu.doc.path)}><Icon name="star" size={14} />Make default document</button>}
+            {!docMenu.doc.isDefault && (
               <>
                 <div className="menu-sep" />
-                <button onClick={() => { setAreaMenu(null); onAction("renameArea", areaMenu.area.path); }}><Icon name="file" size={14} />Rename section…</button>
-                <button onClick={() => { setAreaMenu(null); onAction("unmakeArea", areaMenu.area.path); }}><Icon name="folder" size={14} />Keep as a plain folder</button>
-                <button className="danger" onClick={() => { setAreaMenu(null); onAction("deleteArea", areaMenu.area.path); }}><Icon name="x" size={14} />Delete section and its files</button>
+                <button onClick={() => doc("archiveDoc", docMenu.doc.path)}><Icon name="archive" size={14} />Archive</button>
+                <button className="danger" onClick={() => doc("deleteDoc", docMenu.doc.path)}><Icon name="x" size={14} />Delete document and its folder</button>
               </>
             )}
           </div>
@@ -441,20 +391,19 @@ export function FileTree({ projectId, files, openPath, mainFile, documents = [],
       {menu && (
         <>
           <div className="menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
-          <div className="menu" style={{ left: menu.x, top: Math.min(menu.y, window.innerHeight - 290) }}>
+          <div className="menu" style={{ left: menu.x, top: Math.min(menu.y, window.innerHeight - 320) }}>
             {(!menu.node || menu.node.type === "dir") && (
               <>
                 <button onClick={() => act("newFile", menuDir)}><Icon name="plus" size={14} />New file</button>
                 <button onClick={() => act("newFolder", menuDir)}><Icon name="folderPlus" size={14} />New folder</button>
                 <button onClick={() => act("upload", menuDir)}><Icon name="upload" size={14} />Upload…</button>
-                {menu.node && !sections.some((x) => x.path === menu.node!.path) && <button onClick={() => act("makeArea", menu.node!.path)}><Icon name="grid" size={14} />Make it a section…</button>}
               </>
             )}
             {menu.node?.type === "file" && docPaths.includes(menu.node.path) && menu.node.path !== activeDoc && (
               <button onClick={() => act("compileDoc", menu.node!.path)}><Icon name="play" size={14} />Compile this document</button>
             )}
-            {menu.node?.type === "file" && menu.node.path.endsWith(".tex") && menu.node.path !== mainFile && (
-              <button onClick={() => act("setMain", menu.node!.path)}><Icon name="star" size={14} />Make default document</button>
+            {menu.node?.type === "file" && !isShared(menu.node.path) && !docPaths.includes(menu.node.path) && (
+              <button onClick={() => act("share", menu.node!.path)} title="Every document can use it by name; identical copies in other documents are removed"><Icon name="people" size={14} />Move to Shared</button>
             )}
             <div className="menu-sep" />
             <button onClick={() => act("download", menu.node?.path ?? "")}>

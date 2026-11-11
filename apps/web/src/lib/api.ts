@@ -2,7 +2,7 @@ import type {
   CheckpointFileDiff, PendingChanges,
   DocumentInfo, OutlineEntry, ConferenceEdition, ProjectVenue,
   CiteCard, CiteOptions, LibraryAddResult, LibraryRef, LibraryView, PdfLookup, UsageView,
-  AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, MemberRole, Project, ProjectSection, ProjectUpdate, Session, SyncTexForward, SyncTexInverse,
+  AgentMode, AiSettings, AuthMethods, ProjectAccess, WorkspaceInfo, Chat, ChatEvent, ChatSummary, CitationReport, PaperReview, ReviewSkill, Checkpoint, CompileResult, Engine, FileEntry, MemberRole, Project, ProjectUpdate, Session, SyncTexForward, SyncTexInverse,
 } from "@margin/shared";
 
 export type StoredReview = Omit<PaperReview, "result"> & { status: "running" | "done" | "error"; error?: string; result?: PaperReview["result"] };
@@ -89,11 +89,11 @@ export const api = {
     req<SyncTexInverse | null>(`${P(id)}/synctex/inverse?page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}${doc ? `&doc=${q(doc)}` : ""}`),
   documents: (id: string) => req<DocumentInfo[]>(`${P(id)}/documents`),
   outline: (id: string, doc?: string) => req<{ doc: string; entries: OutlineEntry[] }>(`${P(id)}/outline${doc ? `?doc=${q(doc)}` : ""}`),
-  createDocument: (id: string, body: { title?: string; template?: string; path?: string; layout?: "folder" | "beside"; copyFrom?: string }) =>
+  createDocument: (id: string, body: { title?: string; template?: string; path?: string; copyFrom?: string }) =>
     req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("POST", body)),
-  createArea: (id: string, title: string, path?: string) => req<{ section: ProjectSection; project: Project }>(`${P(id)}/sections`, json("POST", { title, path })),
-  updateArea: (id: string, path: string, patch: { title?: string; index?: number }) => req<Project>(`${P(id)}/sections`, json("PATCH", { path, ...patch })),
-  removeArea: (id: string, path: string) => req<Project>(`${P(id)}/sections?path=${q(path)}`, { method: "DELETE" }),
+  /** Move a file into shared/ for every document; `dry` only says what would happen. */
+  share: (id: string, path: string, dry = false) =>
+    req<{ from: string; to: string; duplicates: string[] }>(`${P(id)}/share${dry ? "?dry=1" : ""}`, json("POST", { path })),
   addSection: (id: string, doc: string, title: string) => req<{ path: string; documents: DocumentInfo[] }>(`${P(id)}/documents/section`, json("POST", { doc, title })),
   updateDocument: (id: string, body: { path: string; engine?: Engine; title?: string; makeDefault?: boolean; archived?: boolean }) =>
     req<{ project: Project; documents: DocumentInfo[] }>(`${P(id)}/documents`, json("PATCH", body)),

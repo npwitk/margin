@@ -1,13 +1,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type * as Y from "yjs";
+import { posix } from "node:path";
 import { z } from "zod";
-import { ROOM, documentTitleOf, boardColumns, columnOf, firstColumn, type Engine, type TaskColumn, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
+import { ROOM, SHARED_DIR, documentTitleOf, boardColumns, columnOf, firstColumn, type Engine, type TaskColumn, assigneesOf, withAssignees, createThread, isTextPath, lineAt, listThreads, reply, setStatus, textOf as yText, threadsOf, type Session, type Task } from "@margin/shared";
 import { emit, withDoc } from "../collab.ts";
 import { addSection, createDocument, listDocuments, updateDocument } from "../documents.ts";
 import { compileProject } from "../compile.ts";
 import { addEntry, movePath, removePath } from "../entries.ts";
-import { addProjectSection } from "../sections.ts";
-import { canEdit } from "../access.ts";
+import { shareFile } from "../shared.ts";
 import { commentOn, listUpdates, postNote } from "../updates.ts";
 import { getProject, listFiles, resolvePath } from "../storage.ts";
 import { editorName, recordEdit, saveVersion } from "../versions.ts";
@@ -92,13 +92,14 @@ function occurrences(text: string, needle: string) {
 const DEFS: Record<string, Def> = {
   ...REFERENCE_DEFS,
   list_files: {
-    description: "List every file in the project with its size. Marks document roots (.tex files with \\documentclass) and the default document.",
+    description: "List every file in the project with its size. Marks document roots (.tex files with \\documentclass), each document's folder, the default document and the shared/ folder.",
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
       const [files, project, docs] = await Promise.all([listFiles(ctx.projectId), getProject(ctx.projectId), listDocuments(ctx.projectId)]);
       const roots = new Set(docs.map((d) => d.path));
-      const sections = new Map((project.sections ?? []).map((x) => [x.path, x.title]));
-      const lines = files.map((f) => (f.type === "dir" ? `${f.path}/${sections.has(f.path) ? ` [section “${sections.get(f.path)}”]` : ""}` : `${f.path} (${f.size} B)${f.path === project.mainFile ? " [default document]" : roots.has(f.path) ? " [document]" : ""}`));
+      const folders = new Map(docs.map((d) => [posix.dirname(d.path), d.title]));
+      const dirNote = (p: string) => (p === SHARED_DIR ? " [shared: every document can use these files by name]" : folders.has(p) ? ` [folder of document “${folders.get(p)}”]` : "");
+      const lines = files.map((f) => (f.type === "dir" ? `${f.path}/${dirNote(f.path)}` : `${f.path} (${f.size} B)${f.path === project.mainFile ? " [default document]" : roots.has(f.path) ? " [document]" : ""}`));
       return { summary: "Listed project files", content: lines.join("\n") || "(empty project)" };
     },
   },
@@ -271,6 +272,24 @@ const DEFS: Record<string, Def> = {
     },
   },
 
+  share_file: {
+    description: "Move a file (a figure, .bib, .cls, macros) into the project's shared/ folder so every document can use it by name, without copies. It keeps its path relative to its document's folder (paper/figures/x.pdf → shared/figures/x.pdf), so existing \\includegraphics{figures/x.pdf} still works. Other documents' identical copies at the same relative path are deleted; copies that differ stay (a document's own file wins).",
+    schema: z.object({ path: z.string() }),
+    async run(input: { path: string }, ctx) {
+      if ((await agentMode(ctx)) === "suggest") return fail("Not shared", SUGGEST_ONLY);
+      ctx.status(`Sharing ${input.path}`, input.path);
+      try {
+        const plan = await shareFile(ctx.projectId, input.path, asAgent(ctx));
+        return {
+          summary: `Shared ${plan.from}`, path: plan.to,
+          content: `Moved ${plan.from} to ${plan.to}.${plan.duplicates.length ? ` Removed identical copies: ${plan.duplicates.join(", ")}.` : ""} Compile the documents that use it to check.`,
+        };
+      } catch (err) {
+        return fail("Couldn't share the file", (err as Error).message);
+      }
+    },
+  },
+
   delete_path: {
     description: "Delete a file or folder. Only when the user asked for it; it stays in version history.",
     schema: z.object({ path: z.string() }),
@@ -296,17 +315,6 @@ const DEFS: Record<string, Def> = {
       recordEdit(ctx.projectId, file, editorName(asAgent(ctx)));
       emit(ctx.projectId, "filesVersion", Date.now());
       return { summary: `Added section ${file}`, path: file, content: `Created ${file} and \\input it from ${docPath}.` };
-    },
-  },
-
-  create_project_section: {
-    description: "Create a section of the project: a named folder (e.g. \"Slides\", \"Experiments\", \"Meeting notes\") shown as its own group in everyone's file list, to put new documents and files in. This is not a LaTeX \\section (use add_section for that). Pass `path` to give an existing folder a section name instead.",
-    schema: z.object({ title: z.string(), path: z.string().optional().describe("An existing folder to turn into a section") }),
-    async run(input: { title: string; path?: string }, ctx) {
-      if ((await agentMode(ctx)) === "suggest") return fail("Section not created", SUGGEST_ONLY);
-      ctx.status(`Creating section “${input.title}”`);
-      const section = await addProjectSection(ctx.projectId, input, asAgent(ctx));
-      return { summary: `Created section “${section.title}”`, path: section.path, content: `Section “${section.title}” is the folder ${section.path}/. Put files there, e.g. create_document with path "${section.path}/<name>.tex".` };
     },
   },
 
@@ -358,37 +366,37 @@ const DEFS: Record<string, Def> = {
 
   list_documents: {
     description:
-      "Start here. Lists the project's sections (named parts people see in Margin's file list, e.g. \"Slides\" or \"SAC 2027 (Submission Version)\") and the LaTeX documents in each: path, the name shown in Margin, its \\title, class, and which one is the default. " +
-      "When someone refers to a section or document by name, match it here and work on that document's files.",
+      "Start here. Lists the project's LaTeX documents, each in its own folder: path, the name shown in Margin, its \\title, class, and which one is the default; and the shared/ folder every document can use files from. " +
+      "When someone refers to a document by name, match it here and work on that document's files.",
     schema: z.object({}),
     async run(_input: Record<string, never>, ctx) {
-      const [docs, project] = await Promise.all([listDocuments(ctx.projectId), getProject(ctx.projectId)]);
-      // The deepest section a document's folder is in.
-      const sections = [...(project.sections ?? [])].sort((a, b) => b.path.length - a.path.length);
-      const home = (p: string) => sections.find((x) => p.startsWith(`${x.path}/`));
+      const [docs, project, files] = await Promise.all([listDocuments(ctx.projectId), getProject(ctx.projectId), listFiles(ctx.projectId)]);
+      // Names people used for a folder before sections became documents' folders.
+      const oldNames = new Map((project.sections ?? []).map((x) => [x.path, x.title]));
       const textCache = new Map<string, string>();
       for (const d of docs) if (d.customTitle) textCache.set(d.path, (await textOf(ctx.projectId, d.path)) ?? "");
       const line = (d: (typeof docs)[number]) => {
         const latexTitle = d.customTitle ? documentTitleOf(textCache.get(d.path) ?? "") : null;
-        return `- ${d.path}: “${d.title}”${latexTitle && latexTitle !== d.title ? ` (its \\title: “${latexTitle}”)` : ""} (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}${d.archived ? " [archived]" : ""}${d.hasPdf ? "" : " (not compiled yet)"}`;
+        const alias = oldNames.get(posix.dirname(d.path));
+        return `- ${d.path}: “${d.title}”${alias && alias !== d.title ? ` (also called “${alias}”)` : ""}${latexTitle && latexTitle !== d.title ? ` (its \\title: “${latexTitle}”)` : ""} (${d.docClass ?? "?"}, ${d.engine})${d.isDefault ? " [default]" : ""}${d.hasPdf ? "" : " (not compiled yet)"}`;
       };
-      const blocks: string[] = [];
-      for (const x of [...(project.sections ?? [])]) {
-        const inside = docs.filter((d) => home(d.path) === x);
-        blocks.push(`Section “${x.title}” (folder ${x.path}/):\n${inside.map(line).join("\n") || "- (no documents yet)"}`);
-      }
-      const loose = docs.filter((d) => !home(d.path));
-      if (loose.length) blocks.push(`${sections.length ? "Not in a section:\n" : ""}${loose.map(line).join("\n")}`);
-      return { summary: `Listed ${docs.length} document${docs.length === 1 ? "" : "s"}`, content: blocks.join("\n\n") || "(no documents)" };
+      const active = docs.filter((d) => !d.archived), archived = docs.filter((d) => d.archived);
+      const blocks = [active.map(line).join("\n") || "(no documents)"];
+      if (archived.length) blocks.push(`Archived:\n${archived.map(line).join("\n")}`);
+      const shared = files.filter((f) => f.type === "file" && f.path.startsWith(`${SHARED_DIR}/`)).map((f) => f.path.slice(SHARED_DIR.length + 1));
+      blocks.push(shared.length
+        ? `Shared folder ${SHARED_DIR}/ (every document uses these by name, e.g. \\includegraphics{x} or \\bibliography{refs}; a document's own file of the same name wins):\n${shared.slice(0, 60).map((f) => `- ${f}`).join("\n")}${shared.length > 60 ? `\n- … ${shared.length - 60} more` : ""}`
+        : `No shared folder yet. Files several documents use belong in ${SHARED_DIR}/ (share_file moves one there).`);
+      return { summary: `Listed ${docs.length} document${docs.length === 1 ? "" : "s"}`, content: blocks.join("\n\n") };
     },
   },
 
   create_document: {
-    description: "Create a new LaTeX document in the project (slides, a cover letter, a rebuttal, a poster, a supplement…). Either pick a template or pass the full source as content. It goes next to the default document unless you give a path, so it can use the project's .bib, macros and figures (LaTeX here can't read ../ paths). Compile it afterwards to check it builds.",
+    description: "Create a new LaTeX document in the project (slides, a cover letter, a rebuttal, a poster, a supplement…). Either pick a template or pass the full source as content. Every document gets a folder of its own; it uses the project's shared/ folder (.bib, macros, figures, classes) by plain name, since LaTeX here can't read ../ paths. Compile it afterwards to check it builds.",
     schema: z.object({
       title: z.string().describe("Human title, e.g. \"Rebuttal for NeurIPS\""),
       template: z.enum(["article", "beamer", "letter", "poster", "ieee", "blank"]).optional().describe("Starting point when no content is given"),
-      path: z.string().optional().describe("Where to create it, e.g. \"slides.tex\" or \"LaTeX/rebuttal.tex\". Defaults to a file named after the title next to the default document."),
+      path: z.string().optional().describe("A new folder name (\"rebuttal\" → rebuttal/main.tex), or a .tex path in a folder that holds no document yet (\"talk/slides.tex\"). Defaults to a folder named after the title."),
       content: z.string().optional().describe("Complete LaTeX source including \\documentclass; replaces the template"),
     }),
     async run(input: { title: string; template?: string; path?: string; content?: string }, ctx) {
@@ -623,19 +631,9 @@ export function toolDefinitions(): Anthropic.Beta.BetaToolUnion[] {
   return [...custom, { type: "web_search_20260209", name: "web_search", max_uses: 5 }];
 }
 
-/** What an advisor's agent (or Claude, asked by an advisor) may do: read, comment, suggest, use the board and updates. */
-const ADVISOR_TOOLS = new Set([
-  "list_files", "read_file", "search", "list_documents", "compile", "propose_edit", "add_comment", "list_comments", "reply_to_comment",
-  "list_tasks", "create_task", "update_task", "list_updates", "post_update",
-  "list_references", "get_reference", "find_pdf", "read_reference", "citation_report",
-]);
-
 export async function runTool(name: string, input: unknown, ctx: ToolContext): Promise<ToolOutcome> {
   const def = DEFS[name];
   if (!def) return fail(`Unknown tool ${name}`, `Unknown tool: ${name}`);
-  if (!ADVISOR_TOOLS.has(name) && !(await canEdit(ctx.projectId, ctx.session))) {
-    return fail(`${name} isn't available`, `${ctx.session.name} is an advisor on this project: you can read, comment, suggest edits (propose_edit) and use the board, but not change files.`);
-  }
   // With eager input streaming the API doesn't validate inputs, and a
   // tolerant parse can hand us a truncated object; validate before running.
   const parsed = def.schema.safeParse(input);

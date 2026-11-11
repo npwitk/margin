@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { listThreads } from "@margin/shared";
@@ -83,7 +83,7 @@ test("board tools follow the project's own columns", async () => {
   assert.deepEqual(board.columns.map((c: { id: string }) => c.id), ["todo", "doing", "review", "blocked", "done"]);
 });
 
-test("an advisor's agent can comment and use the board but not change files", async () => {
+test("an advisor's agent can edit files, comment and use the board", async () => {
   const access = await import("./access.ts");
   const p = await storage.createProject("Advised", "article", "Alice");
   await access.addOwner(p.id, { name: "Alice" });
@@ -95,22 +95,27 @@ test("an advisor's agent can comment and use the board but not change files", as
   const text = await readFile(path.join(storage.projectDir(p.id), "main.tex"), "utf8");
   const line = text.split("\n").find((l) => l.includes("\\begin{document}"))!;
   const edit = await runTool("edit_file", { path: "main.tex", find: line, replace: `${line}%`, reason: "x" }, bob);
-  assert.ok(edit.isError);
-  assert.match(edit.content, /advisor/);
+  assert.ok(!edit.isError, edit.content);
   const comment = await runTool("add_comment", { path: "main.tex", quote: line, message: "Is this right?" }, bob);
   assert.ok(!comment.isError, comment.content);
   const task = await runTool("create_task", { title: "Rerun experiment B" }, bob);
   assert.ok(!task.isError, task.content);
 });
 
-test("list_documents names sections, so an agent can find “SAC 2027 (Submission Version)”", async () => {
+test("list_documents lists each document's folder, old section names and the shared folder", async () => {
   const sections = await import("./sections.ts");
   const docs = await import("./documents.ts");
   const p = await storage.createProject("Venues", "article", "Alice");
   await sections.addProjectSection(p.id, { title: "SAC 2027 (Submission Version)" }, { name: "Alice" });
-  const sac = await docs.createDocument(p.id, { title: "Federated SIEM", template: "article", path: "sac-2027-submission-version/main.tex", layout: "beside" });
+  const sac = await docs.createDocument(p.id, { title: "Federated SIEM", template: "article", path: "sac-2027-submission-version/main.tex" });
   await docs.updateDocument(p.id, sac, { title: "SAC submission" });
-  const r = await runTool("list_documents", {}, ctx(p.id));
-  assert.match(r.content, /Section “SAC 2027 \(Submission Version\)” \(folder sac-2027-submission-version\/\):\n- sac-2027-submission-version\/main\.tex: “SAC submission” \(its \\title: “Federated SIEM”\)/);
-  assert.match(r.content, /Not in a section:\n- main\.tex: .*\[default\]/);
+  let r = await runTool("list_documents", {}, ctx(p.id));
+  assert.match(r.content, /- sac-2027-submission-version\/main\.tex: “SAC submission” \(also called “SAC 2027 \(Submission Version\)”\) \(its \\title: “Federated SIEM”\)/);
+  assert.match(r.content, /- main\.tex: .*\[default\]/);
+  assert.match(r.content, /No shared folder yet/);
+  await mkdir(path.join(storage.projectDir(p.id), "shared"), { recursive: true });
+  await writeFile(path.join(storage.projectDir(p.id), "shared", "refs.bib"), "");
+  r = await runTool("list_documents", {}, ctx(p.id));
+  assert.match(r.content, /Shared folder shared\/.*:\n- refs\.bib/);
 });
+

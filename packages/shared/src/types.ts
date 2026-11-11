@@ -84,6 +84,13 @@ export function documentLabels(docs: Pick<DocumentInfo, "path" | "title">[]): Ma
   return out;
 }
 
+/**
+ * The project's shared folder: figures, .bib, .cls and macros that every
+ * document uses by plain name (\includegraphics{logo}, \bibliography{refs}),
+ * with no ../ paths and no copies. A document's own file of the same name wins.
+ */
+export const SHARED_DIR = "shared";
+
 /** \documentclass that isn't commented out → this .tex is a document root. Returns the class name. */
 export function documentClassOf(tex: string): string | null {
   const m = /^[^%\n]*?\\documentclass\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/m.exec(tex);
@@ -205,7 +212,7 @@ export interface Session {
   agent?: string;
 }
 
-/** Advisors (an instructor, a supervisor) read, comment, follow the Updates feed and use the board, but don't edit files. */
+/** Advisors (an instructor, a supervisor) can do everything editors can; they start on the Updates feed and are labelled as advisors. */
 export type MemberRole = "owner" | "editor" | "advisor";
 
 export interface Member {

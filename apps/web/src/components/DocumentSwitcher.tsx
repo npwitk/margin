@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { documentLabels, templateById, type DocumentInfo, type Engine, type ProjectSection } from "@margin/shared";
+import { documentLabels, templateById, type DocumentInfo, type Engine } from "@margin/shared";
 import { Modal } from "./Dialog.tsx";
 import { Icon, Spinner } from "./Icon.tsx";
 import { TemplateGallery } from "./TemplateGallery.tsx";
@@ -105,50 +105,31 @@ export function DocumentSwitcher({ docs, active, onSelect, onCreate, onSetEngine
   );
 }
 
-export interface NewDocumentInput { title: string; template: string; path?: string; layout: "folder" | "beside"; copyFrom?: string }
+export interface NewDocumentInput { title: string; template: string; path?: string; copyFrom?: string }
 
 /**
- * Start a new document: in one of the project's sections (Slides, Notes…),
- * in its own folder (main.tex, sections/, figures/, refs.bib, like a separate
- * paper), or as one file next to the main document so it shares that paper's
- * .bib and figures. Or start from a copy of an existing document, e.g. a
- * journal version of a conference paper.
+ * Start a new document, always in a folder of its own (one document per
+ * folder): from a template, or from a copy of an existing document, e.g. a
+ * journal version of a conference paper. Files several documents use live in
+ * the project's shared/ folder.
  */
-export function NewDocumentDialog({ defaultDir, docs, sections = [], initialSection, onCreate, onClose }: {
-  defaultDir: string;
+export function NewDocumentDialog({ docs, initialCopyFrom, onCreate, onClose }: {
   docs: DocumentInfo[];
-  /** The project's sections (named folders); a new document can go in one of them. */
-  sections?: ProjectSection[];
-  initialSection?: string;
+  /** Open on "Copy of a document" with this one picked (Duplicate). */
+  initialCopyFrom?: string;
   onCreate(input: NewDocumentInput): Promise<void>;
   onClose(): void;
 }) {
   const [title, setTitle] = useState("");
-  const [from, setFrom] = useState<"template" | "copy">("template");
+  const [from, setFrom] = useState<"template" | "copy">(initialCopyFrom ? "copy" : "template");
   const [template, setTemplate] = useState<string>("article");
-  const [copyFrom, setCopyFrom] = useState(docs.find((d) => d.isDefault)?.path ?? docs[0]?.path ?? "");
-  // Where it goes: "folder" (own top-level folder), "beside" (next to the paper) or "section:<path>".
-  const [place, setPlace] = useState<string>(initialSection ? `section:${initialSection}` : sections.length ? `section:${sections[0].path}` : "folder");
+  const [copyFrom, setCopyFrom] = useState(initialCopyFrom ?? docs.find((d) => d.isDefault)?.path ?? docs[0]?.path ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const labels = documentLabels(docs);
   const fallback = from === "copy" ? `${(copyFrom.includes("/") ? copyFrom.slice(0, copyFrom.lastIndexOf("/")).split("/").pop() : "document")}-copy` : templateById(template)?.name ?? "document";
   const slug = ((title || fallback).toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "document").slice(0, 40);
-  const canBeside = !!templateById(template)?.beside;
-  const section = place.startsWith("section:") ? place.slice(8) : null;
-  const layout: "folder" | "beside" = from === "copy" || !canBeside ? "folder" : section ? "beside" : place === "beside" ? "beside" : "folder";
-  // In a section, a document that shares nothing is one file there; one that brings its own files gets a folder inside it.
-  const target = layout === "beside"
-    ? { path: section ? `${section}/${slug}.tex` : undefined, where: section ? `${section}/${slug}.tex` : `${defaultDir === "." ? "" : `${defaultDir}/`}${slug}.tex` }
-    : { path: section ? `${section}/${slug}` : undefined, where: `${section ? `${section}/` : ""}${slug}/${from === "copy" ? copyFrom.split("/").pop() : "main.tex"}` };
-  const where = target.where;
-  const placeSelect = (
-    <select className="where-select" value={place} onChange={(e) => setPlace(e.target.value)} title="Where the new document goes">
-      {sections.map((s) => <option key={s.path} value={`section:${s.path}`}>In {s.title}</option>)}
-      <option value="folder">In its own folder</option>
-      {canBeside && from === "template" && <option value="beside">Next to the paper (shares its .bib)</option>}
-    </select>
-  );
+  const where = `${slug}/${from === "copy" ? copyFrom.split("/").pop() : "main.tex"}`;
 
   const chosen = templateById(template);
   return (
@@ -157,7 +138,7 @@ export function NewDocumentDialog({ defaultDir, docs, sections = [], initialSect
         e.preventDefault();
         setBusy(true);
         setError(null);
-        try { await onCreate({ title: title.trim(), template, layout, path: target.path, copyFrom: from === "copy" ? copyFrom : undefined }); }
+        try { await onCreate({ title: title.trim(), template, path: slug, copyFrom: from === "copy" ? copyFrom : undefined }); }
         catch (err) { setError((err as Error).message); setBusy(false); }
       }}>
         <div className="gallery-head">
@@ -181,7 +162,7 @@ export function NewDocumentDialog({ defaultDir, docs, sections = [], initialSect
               <span className="muted small">Copies its whole folder: the .tex files, figures and .bib. Your edits go to the copy only.</span>
             </label>
             <input className="input newdoc-title" placeholder="Title, e.g. Journal version" value={title} onChange={(e) => setTitle(e.target.value)} />
-            <div className="row gap">{placeSelect}<p className="muted small lib-help">Creates <code>{where}</code></p></div>
+            <p className="muted small lib-help">Creates <code>{where}</code></p>
           </>
         )}
 
@@ -191,7 +172,6 @@ export function NewDocumentDialog({ defaultDir, docs, sections = [], initialSect
               <span className="gallery-pick-name">{chosen?.name}</span>
               <span className="muted small ellipsis">Creates <code>{where}</code></span>
             </div>
-            {placeSelect}
             <input className="input" placeholder="Title, e.g. Conference talk" value={title} onChange={(e) => setTitle(e.target.value)} />
             {error && <p className="error small">{error}</p>}
             <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>

@@ -20,8 +20,9 @@ const VERSION = "0.3.0";
 const INSTRUCTIONS = `This connects you to a Margin project: LaTeX documents (a paper, and maybe slides, letters, a rebuttal…) that several co-authors edit live in their browsers. You work on the live paper directly: no clone, no commits, nothing to push.
 
 Find the right document first:
-- Call list_documents before editing. It shows the project's sections (named parts of the project in Margin's file list, e.g. "SAC 2027 (Submission Version)") and the documents in each, with the names people see.
-- When the user names a section or document, match that name there and edit that document's files. If several match or none does, ask; don't guess from file names.
+- Call list_documents before editing. It shows the project's documents (each in its own folder) with the names people see, e.g. "SAC 2027 (Submission Version)", and the shared/ folder.
+- When the user names a document, match that name there and edit that document's files.
+- Files several documents use (figures, .bib, macros) live once in shared/ and are used by plain name from any document; share_file moves one there. Don't copy files between document folders. If several match or none does, ask; don't guess from file names.
 - The Margin project is the paper. Edit it through these tools, not a local folder or clone that happens to be open, which may be an older copy.
 
 Work like a co-author:

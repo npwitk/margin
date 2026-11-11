@@ -4,7 +4,6 @@ import {
   acceptSuggestion, createThread, deleteThread, reply, setStatus,
   type ResolvedThread, type Session, type ThreadKind,
 } from "@margin/shared";
-import { api } from "../lib/api.ts";
 import { relativeTime } from "../lib/time.ts";
 import { Avatar } from "./Presence.tsx";
 import { Icon } from "./Icon.tsx";
@@ -20,29 +19,18 @@ interface Props {
   onDraftDone(): void;
   onActivate(t: ResolvedThread): void;
   onClose(): void;
-  /** Read-only viewers (advisors): send comments through the server instead of editing the document, and don't offer Accept. */
-  remote?: { projectId: string; path: string; onError(message: string): void };
 }
 
-/** What a viewer can do to threads: on the live document, or through the API. */
+/** What a viewer can do to threads on the live document. */
 interface ThreadOps {
   create(input: { from: number; to: number; kind: ThreadKind; message?: string; replacement?: string }): void;
   reply(id: string, text: string): void;
   status(id: string, status: "open" | "resolved" | "rejected"): void;
-  accept?(id: string): void;
+  accept(id: string): void;
   remove(id: string): void;
 }
 
-function threadOps(doc: Y.Doc | null, me: string, remote: Props["remote"]): ThreadOps | null {
-  if (remote) {
-    const run = (p: Promise<unknown>) => void p.catch((e) => remote.onError((e as Error).message));
-    return {
-      create: (input) => run(api.addThread(remote.projectId, { path: remote.path, ...input })),
-      reply: (id, text) => run(api.threadAction(remote.projectId, id, { path: remote.path, action: "reply", text })),
-      status: (id, status) => run(api.threadAction(remote.projectId, id, { path: remote.path, action: status })),
-      remove: (id) => run(api.threadAction(remote.projectId, id, { path: remote.path, action: "delete" })),
-    };
-  }
+function threadOps(doc: Y.Doc | null, me: string): ThreadOps | null {
   if (!doc) return null;
   return {
     create: (input) => { createThread(doc, { ...input, author: me }); },
@@ -55,7 +43,7 @@ function threadOps(doc: Y.Doc | null, me: string, remote: Props["remote"]): Thre
 
 const clip = (s: string, n = 160) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
-export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDone, onActivate, onClose, remote }: Props) {
+export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDone, onActivate, onClose }: Props) {
   const [filter, setFilter] = useState<"open" | "all">("open");
   const list = threads.filter((t) => filter === "all" || t.status === "open");
   const listRef = useRef<HTMLDivElement>(null);
@@ -65,7 +53,7 @@ export function ReviewPanel({ doc, threads, session, activeId, draft, onDraftDon
   }, [activeId]);
 
   const me = session.name;
-  const ops = threadOps(doc, me, remote);
+  const ops = threadOps(doc, me);
   return (
     <aside className="review-panel">
       <div className="review-head">
@@ -164,8 +152,8 @@ function ThreadCard({ t, ops, me, active, onActivate }: { t: ResolvedThread; ops
             <input className="input sm-input" placeholder="Reply…" value={text} onChange={(e) => setText(e.target.value)} />
           </form>
           <div className="row gap">
-            {!closed && t.kind === "suggestion" && !orphaned && ops?.accept && (
-              <button className="btn primary" onClick={() => act((o) => o.accept?.(t.id))}><Icon name="check" size={13} />Accept</button>
+            {!closed && t.kind === "suggestion" && !orphaned && (
+              <button className="btn primary" onClick={() => act((o) => o.accept(t.id))}><Icon name="check" size={13} />Accept</button>
             )}
             {!closed && t.kind === "suggestion" && <button className="btn" onClick={() => act((o) => o.status(t.id, "rejected"))}>Reject</button>}
             {!closed && t.kind === "comment" && <button className="btn" onClick={() => act((o) => o.status(t.id, "resolved"))}><Icon name="check" size={13} />Resolve</button>}

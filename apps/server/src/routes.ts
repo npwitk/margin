@@ -18,12 +18,13 @@ import { changesIn, withGitLock } from "./git.ts";
 import { editorName, listVersions, pendingChanges, recordEdit, restoreVersion, saveVersion } from "./versions.ts";
 import { INVITE_ONLY } from "./config.ts";
 import { addEntry, movePath, removePath } from "./entries.ts";
+import { planShare, shareFile } from "./shared.ts";
 import { commentOn, listUpdates, postNote, summarizeNow, tasksFromUpdate } from "./updates.ts";
 import { describeApiError } from "./ai/client.ts";
 import { addProjectSection, removeProjectSection, updateProjectSection } from "./sections.ts";
 import { importArxiv, importGit, importZip } from "./importers.ts";
 import { createToken, listTokens, revokeToken } from "./tokens.ts";
-import { addOwner, canAccess, requireEdit, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
+import { addOwner, canAccess, createInvite, getAccess, joinWithInvite, removeMember, revokeInvite, setRole } from "./access.ts";
 import { limit } from "./ratelimit.ts";
 import { isAdmin as isWorkspaceAdmin, createInvite as createWorkspaceInvite, removeMember as removeWorkspaceMember, revokeInvite as revokeWorkspaceInvite, setRole as setWorkspaceRole, workspaceInfo } from "./workspace.ts";
 import {
@@ -194,6 +195,13 @@ export const projectRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  // Move a file into shared/ for every document. ?dry=1 only says what would happen.
+  .post("/:id/share", async (c) => {
+    const { path: rel } = await c.req.json<{ path: string }>();
+    const id = c.req.param("id");
+    return c.json(c.req.query("dry") ? await planShare(id, rel) : await shareFile(id, rel, c.get("session")));
+  })
+
   .delete("/:id/entries", async (c) => {
     await removePath(c.req.param("id"), c.req.query("path")!, c.get("session"));
     return c.json({ ok: true });
@@ -243,7 +251,7 @@ export const projectRoutes = new Hono<AppEnv>()
   })
   .post("/:id/documents", limit("create", 30, 3600), async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json<{ title?: string; template?: string; path?: string; engine?: Engine; layout?: "folder" | "beside"; copyFrom?: string }>();
+    const body = await c.req.json<{ title?: string; template?: string; path?: string; engine?: Engine; copyFrom?: string }>();
     const created = await createDocument(id, body);
     emit(id, "filesVersion", Date.now());
     return c.json({ path: created, documents: await listDocuments(id) }, 201);
@@ -377,7 +385,6 @@ export const projectRoutes = new Hono<AppEnv>()
     const body = await c.req.json<{ path: string; action: "reply" | "accept" | "delete" | ThreadStatus; text?: string }>();
     resolvePath(id, body.path);
     const by = c.get("session").name;
-    if (body.action === "accept") await requireEdit(id, c.get("session"));
     const ok = await withDoc(id, body.path, c.get("session"), (doc) => {
       if (body.action === "delete") { deleteThread(doc, threadId); return true; }
       if (body.action === "reply") return !!reply(doc, threadId, by, body.text ?? "");

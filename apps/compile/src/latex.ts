@@ -1,7 +1,7 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
-  parseLatexLog, toProjectPath,
+  SHARED_DIR, parseLatexLog, toProjectPath,
   type CompileResult, type Diagnostic, type Engine, type SyncTexForward, type SyncTexInverse,
 } from "@margin/shared";
 import { run } from "./run.ts";
@@ -16,10 +16,19 @@ const ENGINE_FLAG: Record<Engine, string> = { pdflatex: "-pdf", xelatex: "-xelat
  * TeX hardening. openin/openout "p" (paranoid) stops \input{/etc/passwd} and
  * writes outside the work dir; shell escape is off so \write18 can't run commands.
  * In production this also runs in a non-root, network-less, read-only container.
+ *
+ * TEXINPUTS/BIBINPUTS/BSTINPUTS add the project's shared/ folder (and its
+ * subfolders) after the document's own folder, so every document can use
+ * shared figures, .bib, .cls and macros by name. The trailing ":" keeps TeX's
+ * own tree. Paranoid mode still applies: these are files inside the work dir.
  */
-function texEnv(): NodeJS.ProcessEnv {
+function texEnv(workDir: string): NodeJS.ProcessEnv {
+  const shared = `.:${path.join(workDir, SHARED_DIR)}//:`;
   return {
     ...process.env,
+    TEXINPUTS: shared,
+    BIBINPUTS: shared,
+    BSTINPUTS: shared,
     openin_any: "p",
     openout_any: "p",
     shell_escape: "f",
@@ -56,8 +65,8 @@ export async function compile(workDir: string, mainFile: string, engine: Engine)
     "-no-shell-escape", `-outdir=${OUT_DIR}`, path.basename(mainFile),
   ];
   // \includesvg without Inkscape or shell escape: pre-convert SVGs for the svg package.
-  const svgs = await prepareSvgs(cwd).catch(() => ({ converted: 0, failed: [] as string[] }));
-  const res = await run("latexmk", args, { cwd, env: texEnv(), timeoutMs: TIMEOUT_MS });
+  const svgs = await prepareSvgs(cwd, [path.join(dir, SHARED_DIR)]).catch(() => ({ converted: 0, failed: [] as string[] }));
+  const res = await run("latexmk", args, { cwd, env: texEnv(dir), timeoutMs: TIMEOUT_MS });
 
   const logFile = path.join(cwd, OUT_DIR, `${stem(mainFile)}.log`);
   const texLog = await readFile(logFile, "utf8").catch(() => "");
