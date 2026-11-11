@@ -1000,7 +1000,7 @@ export function Workspace({ projectId, session }: { projectId: string; session: 
             </div>
             {previewTab === "citations" && (
               <div className="preview-body">
-                <CitationsPanel projectId={projectId} onOpen={(p, line) => openFile(p, line)} notify={notify} />
+                <CitationsPanel projectId={projectId} doc={currentDoc} onOpen={(p, line) => openFile(p, line)} notify={notify} />
               </div>
             )}
           </section>

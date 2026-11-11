@@ -766,7 +766,7 @@ input.bare { width: 100%; height: 30px; border: none; outline: none; background:
 .cite-status.verified { color: var(--ok); background: rgba(46, 157, 98, 0.12); }
 .cite-status.likely { color: var(--warn); background: var(--warn-soft); }
 .cite-status.mismatch, .cite-status.not_found { color: var(--danger); background: var(--danger-soft); }
-.cite-status.error { color: var(--text-muted); background: var(--hover); }
+.cite-status.error, .cite-status.skipped { color: var(--text-muted); background: var(--hover); }
 
 /* Review view */
 .review-view { flex: 1; display: flex; min-height: 0; }

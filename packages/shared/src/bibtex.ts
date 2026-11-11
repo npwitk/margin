@@ -85,9 +85,23 @@ export function parseBibtex(text: string): BibEntry[] {
   return entries;
 }
 
+const ACCENTS: Record<string, string> = {
+  "'": "\u0301", "`": "\u0300", "^": "\u0302", '"': "\u0308", "~": "\u0303", "=": "\u0304", ".": "\u0307",
+  u: "\u0306", v: "\u030C", H: "\u030B", c: "\u0327", k: "\u0328", r: "\u030A", d: "\u0323", b: "\u0331",
+};
+const LETTERS: Record<string, string> = { ss: "ß", o: "ø", O: "Ø", aa: "å", AA: "Å", ae: "æ", AE: "Æ", oe: "œ", OE: "Œ", l: "ł", L: "Ł", i: "ı", j: "ȷ" };
+const GREEK = "alpha α beta β gamma γ delta δ epsilon ϵ varepsilon ε zeta ζ eta η theta θ vartheta ϑ iota ι kappa κ lambda λ mu μ nu ν xi ξ pi π varpi ϖ rho ρ varrho ϱ sigma σ varsigma ς tau τ upsilon υ phi ϕ varphi φ chi χ psi ψ omega ω Gamma Γ Delta Δ Theta Θ Lambda Λ Xi Ξ Pi Π Sigma Σ Upsilon Υ Phi Φ Psi Ψ Omega Ω"
+  .split(" ").reduce<Record<string, string>>((m, w, i, a) => (i % 2 ? m : { ...m, [w]: a[i + 1] }), {});
+
 /** Strip TeX markup from a field value for display and matching. */
 export function plainTex(s: string): string {
   return s
+    // Accents: \'o, \'{o}, {\'o}, \u{a}, \v c → the accented letter.
+    .replace(/\\(['`^"~=.])\s*(?:\{\s*(\\?[a-zA-Z])\s*\}|(\\?[a-zA-Z]))/g, (_, a: string, x?: string, y?: string) => ((x ?? y)!.replace(/^\\/, "") + ACCENTS[a]).normalize("NFC"))
+    .replace(/\\([uvHckrdb])\s*(?:\{\s*(\\?[a-zA-Z])\s*\}|\s(\\?[a-zA-Z]))/g, (_, a: string, x?: string, y?: string) => ((x ?? y)!.replace(/^\\/, "") + ACCENTS[a]).normalize("NFC"))
+    .replace(/\\(ss|aa|AA|ae|AE|oe|OE|o|O|l|L|i|j)(?![a-zA-Z])\s*/g, (_, l: string) => LETTERS[l])
+    .replace(/\\([a-zA-Z]+)(?![a-zA-Z])\s*/g, (m, w: string) => GREEK[w] ?? m)
+    .replace(/(?<!\\)\$/g, "")
     .replace(/\\[a-zA-Z]+\s*\{([^{}]*)\}/g, "$1")
     .replace(/\\(.)/g, "$1")
     .replace(/[{}]/g, "")
@@ -96,10 +110,13 @@ export function plainTex(s: string): string {
     .trim();
 }
 
+/** Lowercase, without diacritics, for comparing names and titles across sources. */
+export const foldText = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
 /** Every \cite-like key used in a LaTeX source, with its line. */
 export function citedKeys(tex: string): { key: string; line: number }[] {
   const out: { key: string; line: number }[] = [];
-  const re = /\\(?:[a-zA-Z]*cite[a-zA-Z]*|nocite)\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^}]*)\}/g;
+  const re = /\\(?:[a-zA-Z]*cite(?:p|t|alp|alt|author|year|yearpar|num|title|url|date|s|ps|ts)?|[a-zA-Z]*cites)(?![a-zA-Z])\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^}]*)\}/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(tex))) {
     const before = tex.lastIndexOf("\n", m.index);
@@ -113,7 +130,7 @@ export function citedKeys(tex: string): { key: string; line: number }[] {
 
 /** Token-set similarity of two titles in [0, 1]. */
 export function titleSimilarity(a: string, b: string): number {
-  const norm = (s: string) => plainTex(s).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 1);
+  const norm = (s: string) => foldText(plainTex(s).replace(/<[^>]+>/g, " ")).replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 1);
   const A = new Set(norm(a)), B = new Set(norm(b));
   if (!A.size || !B.size) return 0;
   let inter = 0;

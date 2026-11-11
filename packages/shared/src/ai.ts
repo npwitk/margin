@@ -159,7 +159,7 @@ export interface PaperReview {
 
 // Citations
 
-export type CitationStatus = "verified" | "likely" | "mismatch" | "not_found" | "error";
+export type CitationStatus = "verified" | "likely" | "mismatch" | "not_found" | "error" | "skipped";
 
 export interface CitationMatch {
   title: string;
@@ -188,6 +188,8 @@ export interface CitationCheck {
 
 export interface CitationReport {
   checkedAt: string;
+  /** The document whose files were checked. */
+  doc: string;
   entries: CitationCheck[];
   /** \cite keys with no .bib entry. */
   missing: { key: string; file: string; line: number }[];

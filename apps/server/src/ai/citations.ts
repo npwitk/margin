@@ -1,7 +1,8 @@
-import { parseBibtex, plainTex, citedKeys, titleSimilarity, type CitationCheck, type CitationMatch, type CitationReport, type Session } from "@margin/shared";
+import { parseBibtex, plainTex, foldText, citedKeys, titleSimilarity, type CitationCheck, type CitationMatch, type CitationReport, type Session } from "@margin/shared";
 import { writeThroughCollab } from "../collab.ts";
 import { writeText } from "../storage.ts";
 import { textFiles, textOf } from "./paper.ts";
+import { documentFiles, resolveDocument } from "../documents.ts";
 
 /**
  * Checks every .bib entry against Crossref (and OpenAlex as a fallback) so
@@ -32,8 +33,10 @@ async function getJson(url: string): Promise<unknown | null> {
 type CrossrefWork = { title?: string[]; subtitle?: string[]; author?: { family?: string; given?: string; name?: string }[]; issued?: { "date-parts"?: number[][] }; DOI?: string; URL?: string; "container-title"?: string[] };
 type OpenAlexWork = { display_name?: string; publication_year?: number; doi?: string | null; id?: string; authorships?: { author?: { display_name?: string } }[]; primary_location?: { source?: { display_name?: string } | null } | null };
 
+const stripHtml = (s?: string) => s?.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+
 const fromCrossref = (w: CrossrefWork): CitationMatch => ({
-  title: [w.title?.[0], w.subtitle?.[0]].filter(Boolean).join(": "),
+  title: [stripHtml(w.title?.[0]), stripHtml(w.subtitle?.[0])].filter(Boolean).join(": "),
   authors: (w.author ?? []).map((a) => a.family ?? a.name ?? "").filter(Boolean),
   year: w.issued?.["date-parts"]?.[0]?.[0],
   doi: w.DOI,
@@ -43,8 +46,12 @@ const fromCrossref = (w: CrossrefWork): CitationMatch => ({
 });
 
 const fromOpenAlex = (w: OpenAlexWork): CitationMatch => ({
-  title: w.display_name ?? "",
-  authors: (w.authorships ?? []).map((a) => (a.author?.display_name ?? "").split(" ").pop() ?? "").filter(Boolean),
+  title: stripHtml(w.display_name) ?? "",
+  // Names come as "First Last" or, from some sources, "Last, First".
+  authors: (w.authorships ?? []).map((a) => {
+    const n = a.author?.display_name ?? "";
+    return (n.includes(",") ? n.split(",")[0] : n.split(" ").pop() ?? "").trim();
+  }).filter(Boolean),
   year: w.publication_year,
   doi: w.doi?.replace(/^https?:\/\/doi\.org\//, "") || undefined,
   url: w.doi ?? w.id,
@@ -72,10 +79,18 @@ async function openAlexSearch(title: string) {
 
 const firstAuthor = (authorField?: string) => {
   const first = plainTex(authorField ?? "").split(/\s+and\s+/i)[0] ?? "";
-  return (first.includes(",") ? first.split(",")[0] : first.split(" ").pop() ?? "").trim().toLowerCase();
+  return foldText((first.includes(",") ? first.split(",")[0] : first.split(" ").pop() ?? "").trim());
 };
 
 const cache = new Map<string, Promise<Omit<CitationCheck, "key" | "file" | "line" | "cited">>>();
+
+/** Publisher notices that replace a paper's title when it's withdrawn. */
+const REMOVAL = /^(notice of (removal|retraction|violation[^:]*)|retracted( article)?|withdrawn)\b[^:]*:\s*/i;
+
+/** Web pages, software and datasets cited by URL have no published record to look up. */
+const isWebSource = (type: string, fields: Record<string, string>) =>
+  !fields.doi && (["online", "www", "electronic", "software", "manual"].includes(type) ||
+    (type === "misc" && /\\url|https?:\/\//.test(`${fields.howpublished ?? ""} ${fields.url ?? ""} ${fields.note ?? ""}`)));
 
 async function check(fields: Record<string, string>) {
   const title = fields.title ? plainTex(fields.title) : undefined;
@@ -89,9 +104,12 @@ async function check(fields: Record<string, string>) {
   const similarity = (m: CitationMatch) => title
     ? Math.max(titleSimilarity(title, m.title), titleSimilarity(title.split(":")[0], m.title.split(":")[0]) * 0.97)
     : 1;
-  const judge = (m: CitationMatch, how: string) => {
+  const judge = (found: CitationMatch, how: string) => {
+    const removal = REMOVAL.exec(found.title)?.[0];
+    const m = removal ? { ...found, title: found.title.slice(removal.length) } : found;
     const sim = similarity(m);
-    const authorOk = !author || m.authors.some((a) => a.toLowerCase().includes(author) || author.includes(a.toLowerCase()));
+    if (removal && sim >= 0.9) return { ...base, status: "likely" as const, similarity: sim, match: found, note: `The publisher has withdrawn this paper (“${removal.replace(/:\s*$/, "")}”). Check whether you should still cite it.` };
+    const authorOk = !author || m.authors.some((a) => foldText(a).includes(author) || author.includes(foldText(a)));
     const yearOk = !year || !m.year || Math.abs(m.year - year) <= 1;
     if (sim >= 0.9 && authorOk && yearOk) return { ...base, status: "verified" as const, similarity: sim, match: m, note: `Matches a published record ${how}.` };
     // Same title and authors, different year: almost always a reprint or re-registration, not a fake.
@@ -147,6 +165,8 @@ export function parseBibitems(text: string) {
     const end = starts[i + 1]?.index ?? text.search(/\\end\{thebibliography\}/);
     const body = text.slice(m.index! + m[0].length, end > m.index! ? end : undefined).replace(/%.*$/gm, "").replace(/\s+/g, " ").trim();
     const fields: Record<string, string> = {};
+    const url = body.match(/\\(?:url|texttt|href)\{(https?:\/\/[^}]+)\}/);
+    if (url) fields.url = url[1];
     const title = body.match(/``(.+?)''/) ?? body.match(/"(.+?)"/);
     if (title) {
       fields.title = title[1].replace(/[,.]\s*$/, "").trim();
@@ -157,7 +177,7 @@ export function parseBibitems(text: string) {
       if (venue) fields.journal = venue[1].trim();
     }
     const doi = body.match(/doi:?\s*(10\.\d{4,9}\/[^\s,;}]+)/i);
-    if (doi) fields.doi = doi[1].replace(/\.$/, "");
+    if (doi) fields.doi = doi[1].replace(/\\_/g, "_").replace(/\.$/, "");
     const years = body.replace(/doi:?\s*\S+/gi, "").match(/\b(19|20)\d{2}\b/g);
     if (years) fields.year = years[years.length - 1];
     out.push({ key: m[1].trim(), line: text.slice(0, m.index).split("\n").length, fields });
@@ -165,8 +185,12 @@ export function parseBibitems(text: string) {
   return out;
 }
 
-export async function checkCitations(projectId: string): Promise<CitationReport> {
-  const files = await textFiles(projectId);
+/** Checks the references of one document: its \\input tree and the .bib files it uses. */
+export async function checkCitations(projectId: string, docPath?: string): Promise<CitationReport> {
+  const { path: doc } = await resolveDocument(projectId, docPath);
+  const all = await textFiles(projectId);
+  const used = new Set(await documentFiles(projectId, doc, new Set(all.map((f) => f.path))));
+  const files = all.filter((f) => used.has(f.path));
   const contents = new Map(await Promise.all(files.map(async (f) => [f.path, (await textOf(projectId, f.path)) ?? ""] as const)));
   const cited = new Map<string, { file: string; line: number }>();
   for (const [file, text] of contents) {
@@ -174,10 +198,12 @@ export async function checkCitations(projectId: string): Promise<CitationReport>
     for (const { key, line } of citedKeys(text)) if (!cited.has(key)) cited.set(key, { file, line });
   }
 
-  const entries: { key: string; file: string; line: number; fields: Record<string, string> }[] = [];
+  const entries: { key: string; type: string; file: string; line: number; fields: Record<string, string> }[] = [];
   for (const [file, text] of contents) {
-    if (file.endsWith(".bib")) for (const e of parseBibtex(text)) entries.push({ key: e.key, file, line: e.line, fields: e.fields });
-    else if (file.endsWith(".tex") && text.includes("\\bibitem")) for (const e of parseBibitems(text)) entries.push({ ...e, file });
+    if (file.endsWith(".bib")) for (const e of parseBibtex(text)) entries.push({ key: e.key, type: e.type, file, line: e.line, fields: e.fields });
+    else if (file.endsWith(".tex") && text.includes("\\bibitem")) {
+      for (const e of parseBibitems(text)) entries.push({ ...e, type: e.fields.url && !e.fields.doi && !e.fields.journal ? "online" : "misc", file });
+    }
   }
 
   // A few lookups at a time; be polite to the public APIs.
@@ -187,6 +213,10 @@ export async function checkCitations(projectId: string): Promise<CitationReport>
     while (next < entries.length) {
       const i = next++;
       const e = entries[i];
+      if (isWebSource(e.type, e.fields)) {
+        results[i] = { key: e.key, file: e.file, line: e.line, cited: cited.has(e.key), title: e.fields.title ? plainTex(e.fields.title) : undefined, status: "skipped", note: "A web page or software, so there's no published record to check. Make sure the link works." };
+        continue;
+      }
       const cacheKey = JSON.stringify([e.fields.title, e.fields.doi, e.fields.author, e.fields.year]);
       if (!cache.has(cacheKey)) cache.set(cacheKey, check(e.fields));
       const r = await cache.get(cacheKey)!;
@@ -197,7 +227,7 @@ export async function checkCitations(projectId: string): Promise<CitationReport>
 
   const known = new Set(entries.map((e) => e.key));
   const missing = [...cited].filter(([k]) => !known.has(k)).map(([key, loc]) => ({ key, ...loc }));
-  return { checkedAt: new Date().toISOString(), entries: results, missing };
+  return { checkedAt: new Date().toISOString(), doc, entries: results, missing };
 }
 
 /** Fetch BibTeX for a DOI and append it to a .bib file through the live document. */
@@ -214,12 +244,17 @@ export async function fetchDoiBibtex(rawDoi: string) {
   return { doi, bib, entry };
 }
 
-export async function addByDoi(projectId: string, session: Session, rawDoi: string, bibPath?: string) {
+export async function addByDoi(projectId: string, session: Session, rawDoi: string, bibPath?: string, docPath?: string) {
   const fetched = await fetchDoiBibtex(rawDoi);
   const { doi, entry } = fetched;
   let { bib } = fetched;
 
-  const bibs = (await textFiles(projectId)).filter((f) => f.path.endsWith(".bib")).map((f) => f.path);
+  const all = (await textFiles(projectId)).map((f) => f.path);
+  const bibs = all.filter((p) => p.endsWith(".bib"));
+  if (!bibPath && docPath) {
+    const { path: doc } = await resolveDocument(projectId, docPath);
+    bibPath = (await documentFiles(projectId, doc, new Set(all))).find((p) => p.endsWith(".bib"));
+  }
   const target = bibPath ?? bibs[0] ?? "refs/references.bib";
   const current = (await textOf(projectId, target)) ?? "";
   const existing = parseBibtex(current);

@@ -150,8 +150,8 @@ export const api = {
   commentOnUpdate: (id: string, update: string, body: string) => req(`${P(id)}/updates/${update}/comments`, json("POST", { body })),
   summarizeUpdates: (id: string) => req<{ update: ProjectUpdate | null }>(`${P(id)}/updates/summarize`, json("POST")),
   tasksFromUpdate: (id: string, update: string) => req<{ tasks: { id: string; title: string }[] }>(`${P(id)}/updates/${update}/tasks`, json("POST")),
-  citations: (id: string) => req<CitationReport>(`${P(id)}/citations`),
-  addDoi: (id: string, doi: string) => req<{ key: string; file: string; bibtex: string }>(`${P(id)}/citations/doi`, json("POST", { doi })),
+  citations: (id: string, doc?: string) => req<CitationReport>(`${P(id)}/citations${doc ? `?doc=${q(doc)}` : ""}`),
+  addDoi: (id: string, doi: string, doc?: string) => req<{ key: string; file: string; bibtex: string }>(`${P(id)}/citations/doi`, json("POST", { doi, doc })),
 
   library: () => req<LibraryView>("/library"),
   libraryAddDois: (dois: string[], projectId?: string) => req<LibraryAddResult & { failed: string[] }>("/library/doi", json("POST", { dois, projectId })),

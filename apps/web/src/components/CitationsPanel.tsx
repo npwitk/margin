@@ -1,28 +1,31 @@
 import { navigate } from "../lib/router.ts";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CitationReport, CitationStatus } from "@margin/shared";
 import { api } from "../lib/api.ts";
 import { Icon, Spinner } from "./Icon.tsx";
 
-const LABEL: Record<CitationStatus, string> = { verified: "Verified", likely: "Check", mismatch: "Mismatch", not_found: "Not found", error: "Error" };
+const LABEL: Record<CitationStatus, string> = { verified: "Verified", likely: "Check", mismatch: "Mismatch", not_found: "Not found", error: "Error", skipped: "Not checked" };
+const isProblem = (s: CitationStatus) => s !== "verified" && s !== "skipped";
 
-export function CitationsPanel({ projectId, onOpen, notify }: { projectId: string; onOpen(path: string, line?: number): void; notify(msg: string): void }) {
+export function CitationsPanel({ projectId, doc, onOpen, notify }: { projectId: string; doc: string; onOpen(path: string, line?: number): void; notify(msg: string): void }) {
   const [report, setReport] = useState<CitationReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [doi, setDoi] = useState("");
   const [adding, setAdding] = useState(false);
   const [filter, setFilter] = useState<"problems" | "all">("problems");
+  // A report belongs to one document; switching documents starts over.
+  useEffect(() => setReport(null), [doc]);
 
   const run = async () => {
     setBusy(true);
-    try { setReport(await api.citations(projectId)); } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    try { setReport(await api.citations(projectId, doc)); } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
   };
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdding(true);
     try {
-      const r = await api.addDoi(projectId, doi);
+      const r = await api.addDoi(projectId, doi, doc);
       setDoi("");
       notify(`Added \\cite{${r.key}} to ${r.file}`);
       void navigator.clipboard?.writeText(`\\cite{${r.key}}`).catch(() => {});
@@ -33,8 +36,8 @@ export function CitationsPanel({ projectId, onOpen, notify }: { projectId: strin
     }
   };
 
-  const problems = report ? report.entries.filter((e) => e.status !== "verified").length + report.missing.length : 0;
-  const shown = report?.entries.filter((e) => filter === "all" || e.status !== "verified") ?? [];
+  const problems = report ? report.entries.filter((e) => isProblem(e.status)).length + report.missing.length : 0;
+  const shown = report?.entries.filter((e) => filter === "all" || isProblem(e.status)) ?? [];
 
   return (
     <div className="citations">
@@ -54,7 +57,7 @@ export function CitationsPanel({ projectId, onOpen, notify }: { projectId: strin
         <button className="btn" disabled={adding || !doi.trim()}>{adding ? <Spinner /> : "Add"}</button>
       </form>
       <div className="citations-list">
-        {!report && !busy && <div className="empty small">Checks every entry in your .bib files against Crossref and OpenAlex, and every \cite against your .bib, so wrong or made-up references are caught before reviewers find them.</div>}
+        {!report && !busy && <div className="empty small">Checks every reference used by {doc} against Crossref and OpenAlex, and every \cite against its .bib, so wrong or made-up references are caught before reviewers find them.</div>}
         {busy && !report && <div className="empty small"><Spinner /> Looking up references…</div>}
         {report?.missing.map((m) => (
           <button key={`missing-${m.key}`} className="cite-row" onClick={() => onOpen(m.file, m.line)}>
@@ -69,7 +72,7 @@ export function CitationsPanel({ projectId, onOpen, notify }: { projectId: strin
               <div className="cite-key">{e.key}{!e.cited && <span className="muted small"> · not cited</span>}</div>
               {e.title && <div className="small cite-title">{e.title}</div>}
               <div className="muted small">{e.note}</div>
-              {e.match && e.status !== "verified" && (
+              {e.match && isProblem(e.status) && (
                 <div className="small cite-match">Found: {e.match.title} ({e.match.authors.slice(0, 2).join(", ")}{e.match.authors.length > 2 ? " et al." : ""}{e.match.year ? `, ${e.match.year}` : ""}){e.match.doi && <> · <a href={`https://doi.org/${e.match.doi}`} target="_blank" rel="noreferrer" onClick={(ev) => ev.stopPropagation()}>{e.match.doi}</a></>}</div>
               )}
             </div>

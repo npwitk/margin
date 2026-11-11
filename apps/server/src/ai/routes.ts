@@ -182,11 +182,11 @@ export const aiProjectRoutes = new Hono<AppEnv>()
   })
 
   // Citations
-  .get("/:id/citations", limit("citations", 20, 600), async (c) => c.json(await checkCitations(c.req.param("id"))))
+  .get("/:id/citations", limit("citations", 20, 600), async (c) => c.json(await checkCitations(c.req.param("id"), c.req.query("doc"))))
   .post("/:id/citations/doi", async (c) => {
-    const { doi, file } = await c.req.json<{ doi?: string; file?: string }>();
+    const { doi, file, doc } = await c.req.json<{ doi?: string; file?: string; doc?: string }>();
     try {
-      const added = await addByDoi(c.req.param("id"), c.get("session"), doi ?? "", file);
+      const added = await addByDoi(c.req.param("id"), c.get("session"), doi ?? "", file, doc);
       void rememberInLibrary({ key: added.key, type: added.type, fields: added.fields }, c.get("session"), c.req.param("id"));
       return c.json(added, 201);
     } catch (err) {
