@@ -69,6 +69,9 @@ export class AgentRun {
     this.conn = new acp.ClientSideConnection(() => ({
       sessionUpdate: async (n) => this.onUpdate(n),
       requestPermission: (p) => new Promise((resolve) => {
+        // Reviews run in a read-only copy that never syncs back, so don't stop them to ask.
+        const auto = this.ws.readonly && (p.options.find((o) => o.kind === "allow_once") ?? p.options.find((o) => o.kind === "allow_always"));
+        if (auto) return resolve({ outcome: { outcome: "selected", optionId: auto.optionId } });
         const requestId = crypto.randomUUID();
         this.permissions.set(requestId, resolve);
         this.emit({ kind: "permission", requestId, title: p.toolCall.title ?? "Allow this action?", options: p.options.map((o) => ({ optionId: o.optionId, name: o.name, kind: o.kind })) });
@@ -78,7 +81,7 @@ export class AgentRun {
     const init = await this.withTimeout(this.conn.initialize({
       protocolVersion: acp.PROTOCOL_VERSION,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: "margin-connect", version: "0.1.0" },
+      clientInfo: { name: "margin-connect", version: "0.1.1" },
     }), 60_000, "start");
     void init;
 

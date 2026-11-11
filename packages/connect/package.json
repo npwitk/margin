@@ -1,6 +1,6 @@
 {
   "name": "margin-connect",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run Claude Code, Codex and other ACP agents inside Margin, with your own subscriptions and settings",
   "license": "AGPL-3.0-or-later",
   "type": "module",
